@@ -1,0 +1,12 @@
+{
+    "salmon_version": "1.2.1",
+    "index": "../indeces/HI2424_salmon_index",
+    "libType": "A",
+    "unmatedReads": "N445K_3.fastq.gz",
+    "fldMean": "75",
+    "fldSD": "2",
+    "threads": "8",
+    "validateMappings": [],
+    "output": "quants/N445K_3_quant",
+    "auxDir": "aux_info"
+}

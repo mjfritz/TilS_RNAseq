@@ -1,0 +1,522 @@
+---
+title: "RNAseq Analysis with kallisto/Chris Deitrick"
+output: html_notebook
+---
+
+RNA data (from ________ harvested/made by _______) was prepped using Trimmomatic 0.36, to trim for 35bp reads of all N. (Detailed ....)
+This does not use the run_on_deseq.py script.
+## Still need to collate fastQC data
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library(DESeq2)
+library(knitr)
+library(tximeta)
+library(apeglm)
+library(here)
+library(pcaExplorer)
+```
+File organization:____________
+
+Here is defined as the project folder.
+```{r}
+here::here()
+```
+# Running DESeq2
+
+(Help from two versions of DESeq2's creators tutorials:
+https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html
+https://bioconductor.org/packages/release/workflows/vignettes/rnaseqGene/inst/doc/rnaseqGene.html)
+Relying heavily on Chris Deitrick's script (deseq_workflow.r), but modified. First steps detailed in ____workflow.txt (Prepping and running Kallisto, prepping Kallisto output for R input. Reads from the plasmid are removed in the run_on_kallisto.py script. *(6/3) python script did not actually seem to remove the plasmid counts)* Next, running this modified script:
+```{r, echo=FALSE}
+source(here::here("scripts","deseq_workflow_expanded.r"))
+```
+(Putting the deseq objects/results in lists is apparently... bad?) Are functioning at the moment.
+The script generates multiple objects:
+*table_counts: The initial table of counts, for each replicate. (24 total)
+*table_design: the same as it initially read in, describing the strains and replicates.
+*table_annotation: List of annonations read in. (Inital table populated by Chris Deitrick.)
+*deseq_object: contains list of results from running DESeq2::DESeq on the counts matrix, releveled so that each strain is taken as the control. (8 total)
+*deseq_results: contains list of results from running DESeq2::results on the initial counts matrix, contrasted pairwise (56 total.)
+**Only really needed WT as control.** (6/1/20)
+
+## PCA explorer with the deseq object
+Opens an interactive window, where you can export figures and tables.
+```{r}
+library(pcaExplorer)
+pcaExplorer(dds=deseq_object[["RefWT"]], coldata=table_design, annoation=table_annotations)
+```
+
+
+
+# General overview of pairwise data
+The total number of genes for each pair with adjusted p-values less than 0.1:
+```{r}
+diffSums <- lapply(deseq_results[ ,1], function(df){ sum(df$padj < 0.1, na.rm=TRUE)})
+show(diffSums)
+```
+Re-ordering the rows of each DESeq matrix according to p-values, then using the DESeq2 summary function (ordered as they are for the sums list):
+```{r}
+resOrdered <- lapply(deseq_results[ ,1], function(df) {df[order(df$pvalue), ]})
+lapply(resOrdered, function(df) {DESeq2::summary(df)})
+```
+Outlier counts look good. 
+
+Filtering the pairwise results
+```{r}
+resSig <- lapply(resOrdered, function(df){subset(df, padj<0.1)}) 
+resSigFlat <- lapply(resSig, function(df){as.data.frame(df)})
+```
+(The flat version removes the DESEq2 results object class from each item, making each element a little easier to transform.)
+
+# ShinyOmics
+*Shiny prep could be its own script for reusability*
+
+Adding the gene name from the row names, and renaming the columns to match what ShinyOmics expects.
+```{r}
+colnames(resSigFlat[[1]]) #As example
+resSigShiny <- lapply(resSigFlat, function(df){
+  df <- tibble::rownames_to_column(df, var="Gene")
+  df <- rename(df, "log2FoldChange"="Value")
+})
+colnames(resSigShiny[[1]])
+```
+
+Attaching the mutant and reference data as columns, then exporting to .csv files.
+```{r}
+wordList <- as.list(names(resSigFlat))
+resSigShiny <- mapply( function(df, w ) {words <- unlist(strsplit(w, "_to_", fixed=TRUE))
+  df <- cbind( df, "mutant"=rep(words[[1]], nrow(df)),
+                        "comparedTo"=rep(words[[2]], nrow(df)))
+}, resSigShiny, wordList, SIMPLIFY = FALSE, USE.NAMES = TRUE)
+collated <- do.call(rbind, resSigFlat)
+dir.create(here::here("results","DESeq2_results_forShinyOmics"))
+mapply( write.csv, resSigShiny, file=here::here("results","Deseq2_results_forShinyOmics", paste0(names(resSigShiny),".csv")), row.names = TRUE)
+```
+
+Prep the metadata file from Chris's annotation file, and exptsheet.csv that points to all of the files that ShinyOmics is expecting. (Note that here I've only used the files where WT is the control. Certain capitalizaitons for names required for ShinyOmics.)
+
+(ShinyOmics appears to benefit from a detailed meta data table that can group the genes. ... will need to work on it.)
+```{r}
+metaFile <- table_annotations %>% select("locusTag", "assembly_unit", "chromosome", "name", "start", "end", "strand", "feature_interval_length", "product_length", "product_accession", "level", "annotation")
+metaFile <- rename(metaFile, "Gene"="locusTag", "Description"="name")
+colOrder <- c("Gene", "product_accession", "Description", "chromosome", "start", "end", "strand", "feature_interval_length", "product_length", "assembly_unit", "level", "annotation")
+metaFile <- metaFile[ , colOrder]
+metaFile <- apply(metaFile, c(1,2), function(df){
+  df <- gsub("|", " - ", df, fixed=TRUE)
+  df <- gsub("[", "", df, fixed=TRUE)
+  df <- gsub("]", "", df, fixed=TRUE)
+})
+
+write.csv(as.data.frame(metaFile), here::here("data", "BcenHI2424metadata.csv"), row.names = FALSE)
+
+parts <- lapply( wordList, function(w) {unlist(strsplit(w, "_to_", fixed=TRUE))})
+master <- do.call("rbind", parts)
+colnames(master) <- c("mutant", "comparedTo")
+Experiment <- vector("list", nrow(master))
+Strain <- rep("BcenHI2424", nrow(master))
+tilS <- c("A244T", "N274Y", "N445K", "P421L")
+PPC <- c("S3C", "T41T")
+Experiment <- mapply( function(x, l){
+  if ( x %in% tilS ){ l <- "tilS"}
+  else if ( x %in% PPC) { l <- "PPC"}
+  else if ( x == "WT") { l <- "WT"}
+  else if ( x == "tRNA") { l <- "tilS"} # grouping with TilS
+  else { print("Oops?")}
+  return(l)
+}, x = master[,1], l = experiment) #sorting on "mutant"
+DataFile <- unlist(lapply(wordList, function(x) {
+  here::here("results", "DESeq2_results_forShinyOmics", paste0(x, ".csv"))
+}))
+MetadataFile <- unlist(rep( here::here("data", "BcenHI2424metadata.csv" ), nrow(master)))
+noList<-unlist(wordList)
+timeFill <- rep("none", nrow(master))
+master <- data.frame(master, Experiment, Strain, DataFile, MetadataFile, noList,timeFill )
+colnames(master)[7]<-"Name"
+colnames(master)[8]<-"Time"
+#write.csv(as.data.frame(master), here("data", "exptsheet.csv")) #This line for all of the pairwise comparisons, but the experiment column needs modified then.
+
+#Subsetting the experiment sheet to only include WT as the control:
+masterWT <- master[ master$comparedTo == "WT", ]
+write.csv(as.data.frame(masterWT), here::here("data", "exptsheet.csv"))
+```
+
+Running ShinyOmics scripts server.r in the scripts folder by opening the file and using "run app" button. (Library dependencies listed at the top of the file.) (From the ShinyOmics github project folder system, copied ui.r and server.r into main project folder, then the 4 scripts found in the "scripts" folder to the project folder's "scripts" folder.)
+
+### Running into problems (DataTable requesting unknown paramters. Appears to be related to shiny and how it handles htmltools/htmlwidgets. I tried to apply fixes listed [here](https://github.com/rstudio/shiny/issues/2653), but server.R says that it requires htmltools 4.0 if I try to downgrade, and using the DT::renderDataTable instead of shiny's version, just results in no tables at all.
+
+
+
+
+
+# Picking up from here
+
+##subsetting the data into TilS and PPC
+Going to run deseq_workflow_expanded.r, but modified to point to the subset abundance tables. (DId not originally filter out chromosome 3, see the "filter_chromosome3" function.)
+```{r, echo=FALSE}
+source(here::here("scripts","deseq_workflow_expanded_subsetTilS.r"))
+source(here::here("scripts", "deseq_workflow_expanded_subsetPPC.r"))
+```
+Each DESeq object and result object has different lengths. Following similar filtering as before:
+```{r}
+diffSumsTilS <- lapply(deseq_results_TilS[ ,1], function(df){sum(df$padj < 0.1, na.rm=TRUE)})
+compSumsTilS <- cbind("TilS subset"=diffSumsTilS, "All mutants"=diffSums[names(diffSumsTilS)])
+write.csv(compSumsTilS, here::here("results", "DESeq2_results_Expanded", "TilSsubsetSums.csv"))
+
+diffSumsPPC <- lapply(deseq_results_PPC[ ,1], function(df){(sum(df$padj < 0.1, na.rm=TRUE))})
+compSumsPPC <- cbind("PPC subset"=diffSumsPPC, "All mutants"=diffSums[names(diffSumsPPC)])
+write.csv(compSumsPPC, here::here("results", "DESeq2_results_Expanded", "PPCsubsetSums.csv"))
+
+```
+After subsetting, there appears to be fewer genes (mostly) that make the padj<0.1 cutoff. The PPC mutants don't have many that make the cutoff overall.
+
+Re-ordering and filtered significant genes:
+```{r}
+resOrderedTilS <- lapply(deseq_results_TilS[ ,1], function(df) {df[order(df$pvalue), ]})
+resOrderedPPC <- lapply(deseq_results_PPC[ ,1], function(df) {df[order(df$pvalue), ]})
+resSigTilS <- lapply(resOrderedTilS, function(df){subset(df, padj<0.1)}) 
+resSigPPC <- lapply(resOrderedPPC, function(df){subset(df, padj<0.1)}) 
+resSigFlatTilS <- lapply(resSigTilS, function(df){as.data.frame(df)})
+resSigFlatPPC <- lapply(resSigPPC, function(df){as.data.frame(df)})
+```
+
+
+```{r}
+wordListTilS <- as.list(names(resSigFlatTilS))
+resSigFlatTilS <- mapply( function(df, w ) {words <- unlist(strsplit(w, "_to_", fixed=TRUE))
+  df <- cbind( df, "mutant"=rep(words[[1]], nrow(df)),
+                        "comparedTo"=rep(words[[2]], nrow(df)))
+}, resSigFlatTilS, wordListTilS, SIMPLIFY = FALSE, USE.NAMES = TRUE)
+
+wordListPPC <- as.list(names(resSigFlatPPC))
+resSigFlatPPC <- mapply( function(df, w ) {words <- unlist(strsplit(w, "_to_", fixed=TRUE))
+  df <- cbind( df, "mutant"=rep(words[[1]], nrow(df)),
+                        "comparedTo"=rep(words[[2]], nrow(df)))
+}, resSigFlatPPC, wordListPPC, SIMPLIFY = FALSE, USE.NAMES = TRUE)
+
+resSigFlat <- lapply(resSigFlat, function(df){
+  df <- tibble::rownames_to_column(df, var="locusTag")
+})
+resSigFlatTilS <- lapply(resSigFlatTilS, function(df){
+  df <- tibble::rownames_to_column(df, var="locusTag")
+})
+resSigFlatPPC <- lapply(resSigFlatPPC, function(df){
+  df <- tibble::rownames_to_column(df, var="locusTag")
+})
+
+#This part is the most organized way of doing this.
+collated <- do.call(rbind,resSigFlat)
+collatedTilS <- do.call(rbind, resSigFlatTilS)
+collatedPPC <- do.call(rbind, resSigFlatPPC)
+dir.create(here::here("results","Deseq2_results_Filtered"))
+write.csv(as.data.frame(collated), here("results", "DESeq2_results_Filtered","pairwise_collated.csv"), row.names = TRUE)
+write.csv(as.data.frame(collatedTilS), here("results", "DESeq2_results_Filtered","pairwise_collated.TilS.csv"), row.names = TRUE)
+write.csv(as.data.frame(collatedPPC), here("results", "DESeq2_results_Filtered","pairwise_collated.PPC.csv"), row.names = TRUE)
+```
+
+
+### PCA explorer on subsets
+Now running pca explorer on each subset. These allow transformation within the Explorer. (Defined transformations come below.)
+```{r}
+pcaExplorer(dds=deseq_object_TilS[["RefWT"]], coldata=table_design, annotation = table_annotations)
+```
+```{r}
+pcaExplorer(dds=deseq_object_PPC[["RefWT"]], coldata=table_design, annotation = table_annotations)
+```
+
+
+## LFC
+Considering that subsetting mostly resulted in fewer significant results, am going to start with the total data set.
+
+Would now like to look at the lfc shrinkage, but would like to organize into a matrix (ideally leaving blanks for identity.)
+mutantList can act as an index of the mutants in this matrix (and other lists).
+```{r}
+resLFC <- matrix( , nrow=0 , ncol=8 , byrow=TRUE)
+count<-1
+for(i in names(deseq_object)){
+  shrList <- resultsNames(deseq_object[[i]])
+  shrList <- sort(shrList[2:8])
+  holder<- sapply(shrList, function(shrink) {lfcShrink(deseq_object[[i]], coef=shrink, type="apeglm")})
+  holder<- append(holder, list(NULL), count-1)
+  resLFC<- rbind(resLFC, holder)
+  row.names(resLFC)[count] <- i
+  print(paste("Bound row for ",i))
+  count<-count+1
+}
+mutantList <- sort(unique(as.character(table_design$strain)))
+colnames(resLFC) <- mutantList
+resLFC <- t(resLFC)
+```
+
+### MA plot
+>In DESeq2, the function plotMA shows the log2 fold changes attributable to a given variable over the mean of normalized counts for all the samples in the DESeqDataSet. Points will be colored red if the adjusted p value is less than 0.1. Points which fall out of the window are plotted as open triangles pointing either up or down.
+>It is more useful visualize the MA-plot for the shrunken log2 fold changes, which remove the noise associated with log2 fold changes from low count genes without requiring arbitrary filtering thresholds.
+>After calling plotMA, one can use the function identify to interactively detect the row number of individual genes by clicking on the plot. One can then recover the gene identifiers by saving the resulting indices:
+`idx <- identify(res$baseMean, res$log2FoldChange)
+rownames(res)[idx]`
+
+To start, I'll look at the plots for the WT references (column 8). The results are in a list, where the dimnames can provide an index key.
+
+```{r}
+resultsKey <- dimnames(deseq_results)[[1]]
+resultsKey
+```
+Plotting:
+```{r}
+DESeq2::plotMA(resLFC[[1,8]], ylim=c(-2,2))
+```
+(For the interactive bit, this has to be run not in the notebook.)
+After clicking on the plot:
+```{r}
+idx <- identify(deseq_results[[match("A244T_to_WT", resultsKey)]]$baseMean, deseq_results[[match("A244T_to_WT", resultsKey)]]$log2FoldChange)
+rownames(deseq_results[[match("A244T_to_WT", resultsKey)]])[idx]
+```
+
+
+### Transformations
+Using the rlog transformations, as the data set is less than 30. ([For reasoning](https://bioconductor.org/packages/release/workflows/vignettes/rnaseqGene/inst/doc/rnaseqGene.html#the-variance-stabilizing-transformation-and-the-rlog))
+
+The DESeq2Transform objects produced, can be given to pcaExplorer as well.
+
+#### QA
+As a part of QA, will start the transformations with blind=TRUE (default setting.)
+Again, performing with WT as control. (Including A224T as a sort of comparison)
+
+```{r}
+#rld <- rlog(deseq_object[["RefWT"]], blind=TRUE)
+nameList <- names(deseq_object)
+rld <- lapply(setNames(nameList,nameList), function(strain){
+  rlog(deseq_object[[strain]], blind=TRUE)
+})
+```
+
+Heatmap from this transformed data:
+
+```{r}
+library("pheatmap")
+#select <- order(rowMeans(counts(deseq_object[[8]],normalized=TRUE)), decreasing=TRUE)[1:20]
+select <- vector("list", 8)
+select <- lapply(setNames(nameList,nameList), function(strain){
+  order(rowMeans(counts(deseq_object[[strain]], normalized=TRUE)), decreasing=TRUE)[1:20]
+})
+
+df <- as.data.frame(colData(deseq_object[[8]])[,c("strain","type")]) #this is just a key
+
+# pheatmap(assay(rld)[select,], cluster_rows=FALSE, show_rownames=FALSE,
+#          cluster_cols=FALSE, annotation_col=df, main = "WT as control")
+lapply(names(deseq_object), function(strain){
+  pheatmap(assay(rld[[strain]])[select[[strain]],], cluster_rows=FALSE, show_rownames=FALSE, cluster_cols=FALSE, annoation_col=df, main = strain)
+})
+```
+All of the heat maps appear either identical.
+
+Clustering (stalled on batching)
+```{r}
+# library("RColorBrewer")
+# colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+# 
+sampleDists <- vector("list", 8)
+sampleDists <- lapply(setNames(nameList,nameList), function(strain){
+  sampleDists[[strain]] <- dist(t(assay(rld[[strain]])))
+})
+# 
+# sampleDistMatrix <- lapply(setNames(nameList,nameList), function(strain){
+#   as.matrix(sampleDists[[strain]])
+# })
+# sampleDistMatrix <- lapply(nameList, function(strain){
+#   rownames(sampleDistMatrix[[strain]]) <- paste(rld[[strain]]$strain, rld[[strain]]$replicate, sep="-")
+#   colnames(sampleDistMatrix[[strain]]) <- NULL
+# })
+# lapply(nameList, function(strain){ #This is the problem section
+#   
+#   pheatmap(sampleDistMatrix[[strain]],
+#            clustering_distance_rows=sampleDists[[strain]],
+#            clustering_distance_cols=sampleDists[[strain]],
+#            col=colors)
+# })
+
+```
+```{r}
+library("RColorBrewer")
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+
+sampleDistMatrixWT <- as.matrix(sampleDists[["RefWT"]])
+rownames(sampleDistMatrixWT) <- paste(rld[["RefWT"]]$strain, rld[["RefWT"]]$replicate, sep="-")
+colnames(sampleDistMatrixWT) <- NULL
+pheatmap(sampleDistMatrixWT,
+         clustering_distance_rows=sampleDists[["RefWT"]],
+         clustering_distance_cols=sampleDists[["RefWT"]],
+         col=colors, main = "RefWT")
+
+sampleDistMatrixA244T <- as.matrix(sampleDists[["RefA244T"]])
+rownames(sampleDistMatrixA244T) <- paste(rld[["RefA244T"]]$strain, rld[["RefA244T"]]$replicate, sep="-")
+colnames(sampleDistMatrixA244T) <- NULL
+pheatmap(sampleDistMatrixA244T,
+         clustering_distance_rows=sampleDists[["RefA244T"]],
+         clustering_distance_cols=sampleDists[["RefA244T"]],
+         col=colors, main = "RefA244T")
+```
+The change in reference, does not appear to change clustering either. But as far as QA goes, some of the samples don't cluster as expected.
+
+#### Not Blind Transformation
+Following similar workflow as the blind.
+```{r}
+nameList <- names(deseq_object)
+rldNotBlind <- lapply(setNames(nameList,nameList), function(strain){
+  rlog(deseq_object[[strain]], blind=TRUE)
+})
+```
+
+```{r}
+library("pheatmap")
+#select <- order(rowMeans(counts(deseq_object[[8]],normalized=TRUE)), decreasing=TRUE)[1:20]
+select <- vector("list", 8)
+select <- lapply(setNames(nameList,nameList), function(strain){
+  order(rowMeans(counts(deseq_object[[strain]], normalized=TRUE)), decreasing=TRUE)[1:20]
+})
+
+df <- as.data.frame(colData(deseq_object[[8]])[,c("strain","type")]) #this is just a key
+
+# pheatmap(assay(rld)[select,], cluster_rows=FALSE, show_rownames=FALSE,
+#          cluster_cols=FALSE, annotation_col=df, main = "WT as control")
+lapply(names(deseq_object), function(strain){
+  pheatmap(assay(rldNotBlind[[strain]])[select[[strain]],], cluster_rows=FALSE, show_rownames=FALSE, cluster_cols=FALSE, annoation_col=df, main = strain)
+})
+```
+Again, similar results. So I will simply use the RefWT for the clustering.
+
+```{r}
+
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+
+sampleDistsNB <- dist(t(assay(rldNotBlind[["RefWT"]])))
+sampleDistMatrixNB <- as.matrix(sampleDists[["RefWT"]])
+rownames(sampleDistMatrixNB) <- paste(rldNotBlind[["RefWT"]]$strain, rldNotBlind[["RefWT"]]$replicate, sep="-")
+colnames(sampleDistMatrixNB) <- NULL
+pheatmap(sampleDistMatrixNB,
+         clustering_distance_rows=sampleDistsNB,
+         clustering_distance_cols=sampleDistsNB,
+         col=colors, main = "RefWT")
+```
+
+Extending the rlog transformations to the subset DESeq objects:
+```{r}
+nameListTilS <- names(deseq_object_TilS)
+rldTilSNB <- lapply(setNames(nameListTilS,nameListTilS), function(strain){
+  rlog(deseq_object_TilS[[strain]], blind=TRUE)
+})
+nameListPPC <- names(deseq_object_PPC)
+rldPPCNB <- lapply(setNames(nameListPPC,nameListPPC), function(strain){
+  rlog(deseq_object_PPC[[strain]], blind=TRUE)
+})
+```
+
+
+#### PCA
+To begin, using DESeq2's built in PCA plot, set strain colors.
+```{r}
+strainColors <- setNames(c("darkviolet", "dodgerblue3", "firebrick1", "green3",
+                           "sienna3", "springgreen3", "cyan2", "orange2"), levels(table_design$strain))
+```
+
+```{r}
+pcaData <- plotPCA(rldNotBlind[["RefWT"]], intgroup=c("strain", "type"), returnData=TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+allplot<- ggplot(pcaData, aes(PC1, PC2, color=strain, shape=type)) +
+  geom_point(size=3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  coord_fixed() +
+  ggtitle("Principle Component Analysis, Full Data Set") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_color_manual(values = strainColors)
+```
+
+```{r}
+pcaDataTilS <- plotPCA(rldTilSNB[["RefWT"]], intgroup="strain", returnData=TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+TilSplot <- ggplot(pcaDataTilS, aes(PC1, PC2, color=strain)) +
+  geom_point(size=3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  coord_fixed() +
+  ggtitle("Principle Component Analysis, TilS DataSet") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_color_manual(values = strainColors)
+```
+
+```{r}
+pcaDataPPC <- plotPCA(rldPPCNB[["RefWT"]], intgroup="strain", returnData=TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+PPCplot <- ggplot(pcaDataPPC, aes(PC1, PC2, color=strain)) +
+  geom_point(size=3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  coord_fixed() +
+  ggtitle("Principle Component Analysis, PPC DataSet") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_color_manual(values = strainColors)
+```
+
+
+
+Using pcaEXplorer's interactive features (because all objects are passed, didn't use any of the buttons in the first tab to generate objects:
+```{r}
+
+pcaExplorer(dds = deseq_object[[8]], dst = rldNotBlind[["RefWT"]], coldata = table_design, annotation = table_annotations)
+```
+
+### Refocusing:
+rld refocus
+*some excel files, WT as reference, more focused on the biology aspect than the statistical power, not concerned about comparison (like the log2diff)
+*groupings are more important here, than before
+*censor chromosome 3 after inital rundown (if it is signficant)
+*looking for major drivers
+*current cycle
+  + rlog transormation, blind = FALSE
+  + pca: clustering, groups of genes
+  + (plotCounts?)
+  + consider the major players: is chromosome 3 skewing? separate the responses out (tRNA by itself?)
+
+Renaming for convenience (rlog blind=FALSE, RefWT), and changing annotation table names for pcaExplorer.
+```{r}
+rlt <- rldNotBlind[[8]]
+rltP <- rldPPCNB[[3]]
+rltT <- rldTilSNB[[6]]
+dO <- deseq_object[[8]]
+dOP <- deseq_object_PPC[[3]]
+dOT <- deseq_object_TilS[[6]]
+```
+
+```{r}
+table_annotations$gene_name <- paste(table_annotations$locusTag, table_annotations$Name, "-")
+```
+
+pcaExplorer
+```{r echo=FALSE}
+pcaExplorer(dds = dOT, dst = rltT, coldata = table_design_TilS, annotation = table_annotations)
+
+pcaExplorer(dds = dOP, dst = rltP, coldata = table_design_TilS, annotation = table_annotations)
+```
+ S3C1, T41T1 always cluster by themselves... 
+
+
+Filtering out chromosome 3, to see if data unskews.
+```{r}
+source(here::here("scripts","deseq_workflow_expanded_subsetTilS_mk2.r"))
+source(here::here("scripts", "deseq_workflow_expanded_subsetPPC_mk2.r"))
+```
+
+plotCounts will come in handy? After identifying genes of interest (possibly by selecting from MA plots), can return to the overall Deseq_object of choice to compare across the strains.
+
+Want to rearrange the data so that there is a dataframe where the rows are the gene loci, with columns (lists?) for logfold2 and padj for each strain (per reference strain)?
+
+*After finding that the plasmid was not actually filtered out of the data set, I'm starting a new notebook with a cleaned up version of the deseq_workflow that allows passing of parameters. See RNAseq_ChrisAnalysis_2.Rmd*
+
+
+#### Notes
+Concern that some samples were mixed up based on the initial pcaExplorer peek. After running Breseq on all of the tRNA and N445K samples, they appear to be OK. (I wonder if this correlates to the weird growth behavior we sometimes see within a strain?)
+
+
+unsure <- sapply(deseq_results[ ,1], `[[`, "pvalue")

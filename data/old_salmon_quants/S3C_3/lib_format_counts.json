@@ -1,0 +1,22 @@
+{
+    "read_files": "[ S3C_3.fastq.gz ]",
+    "expected_format": "SF",
+    "compatible_fragment_ratio": 1.0,
+    "num_compatible_fragments": 5604505,
+    "num_assigned_fragments": 5604505,
+    "num_frags_with_concordant_consistent_mappings": 5602710,
+    "num_frags_with_inconsistent_or_orphan_mappings": 1797,
+    "strand_mapping_bias": 0.9996793651966176,
+    "MSF": 0,
+    "OSF": 0,
+    "ISF": 0,
+    "MSR": 0,
+    "OSR": 0,
+    "ISR": 0,
+    "SF": 5602710,
+    "SR": 1797,
+    "MU": 0,
+    "OU": 0,
+    "IU": 0,
+    "U": 0
+}

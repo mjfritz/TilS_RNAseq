@@ -1,0 +1,22 @@
+{
+    "read_files": "[ T41T_2.fastq.gz ]",
+    "expected_format": "SF",
+    "compatible_fragment_ratio": 1.0,
+    "num_compatible_fragments": 6228509,
+    "num_assigned_fragments": 6228509,
+    "num_frags_with_concordant_consistent_mappings": 6226746,
+    "num_frags_with_inconsistent_or_orphan_mappings": 1765,
+    "strand_mapping_bias": 0.9997166256911162,
+    "MSF": 0,
+    "OSF": 0,
+    "ISF": 0,
+    "MSR": 0,
+    "OSR": 0,
+    "ISR": 0,
+    "SF": 6226746,
+    "SR": 1765,
+    "MU": 0,
+    "OU": 0,
+    "IU": 0,
+    "U": 0
+}

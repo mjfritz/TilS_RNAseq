@@ -1,0 +1,47 @@
+Chris_data
+.Rproj.user
+results/old
+results/Rockhopper_results
+data/abundance.all.tsv
+data/GB.abundance.all.tsv
+data/old_withoutRNA/abundance.all.tsv
+analysis/old
+
+# Compiled source #
+###################
+*.com
+*.class
+*.dll
+*.exe
+*.o
+*.so
+*.RData
+
+# Packages #
+############
+# it's better to unpack these files and commit the raw source
+# git has its own built in compression methods
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+
+# Logs and databases #
+######################
+*.log
+*.sql
+*.sqlite
+
+# OS generated files #
+######################
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

@@ -1,0 +1,8 @@
+"","mutant","comparedTo","Experiment","Strain","DataFile","MetadataFile","Name","Time"
+"7","A244T","WT","tilS","BcenHI2424","C:/Users/mjf123/Documents/tilS/RNAseq/results/DESeq2_results_forShinyOmics/A244T_to_WT.csv","C:/Users/mjf123/Documents/tilS/RNAseq/data/BcenHI2424metadata.csv","A244T_to_WT","none"
+"14","N274Y","WT","tilS","BcenHI2424","C:/Users/mjf123/Documents/tilS/RNAseq/results/DESeq2_results_forShinyOmics/N274Y_to_WT.csv","C:/Users/mjf123/Documents/tilS/RNAseq/data/BcenHI2424metadata.csv","N274Y_to_WT","none"
+"21","N445K","WT","tilS","BcenHI2424","C:/Users/mjf123/Documents/tilS/RNAseq/results/DESeq2_results_forShinyOmics/N445K_to_WT.csv","C:/Users/mjf123/Documents/tilS/RNAseq/data/BcenHI2424metadata.csv","N445K_to_WT","none"
+"28","P421L","WT","tilS","BcenHI2424","C:/Users/mjf123/Documents/tilS/RNAseq/results/DESeq2_results_forShinyOmics/P421L_to_WT.csv","C:/Users/mjf123/Documents/tilS/RNAseq/data/BcenHI2424metadata.csv","P421L_to_WT","none"
+"35","S3C","WT","PPC","BcenHI2424","C:/Users/mjf123/Documents/tilS/RNAseq/results/DESeq2_results_forShinyOmics/S3C_to_WT.csv","C:/Users/mjf123/Documents/tilS/RNAseq/data/BcenHI2424metadata.csv","S3C_to_WT","none"
+"42","T41T","WT","PPC","BcenHI2424","C:/Users/mjf123/Documents/tilS/RNAseq/results/DESeq2_results_forShinyOmics/T41T_to_WT.csv","C:/Users/mjf123/Documents/tilS/RNAseq/data/BcenHI2424metadata.csv","T41T_to_WT","none"
+"49","tRNA","WT","tilS","BcenHI2424","C:/Users/mjf123/Documents/tilS/RNAseq/results/DESeq2_results_forShinyOmics/tRNA_to_WT.csv","C:/Users/mjf123/Documents/tilS/RNAseq/data/BcenHI2424metadata.csv","tRNA_to_WT","none"

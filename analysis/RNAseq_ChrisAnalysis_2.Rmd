@@ -1,0 +1,439 @@
+---
+title: "RNAseq Analysis with kallisto/Chris Deitrick, pt. 2"
+output: html_notebook
+---
+A continuation from RNAseq_ChrisAnalysis.Rmd
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library(DESeq2)
+library(knitr)
+library(apeglm)
+library(here)
+library(pcaExplorer)
+library(genefilter)
+library(pheatmap)
+library(RColorBrewer)
+```
+File organization:____________
+
+Here is defined as the project folder. Load workflow functions.
+```{r}
+here::here()
+source(here("scripts", "deseq_workflow_expanded_mk3.r"), local=TRUE, echo=FALSE)
+```
+
+
+Running the DESeq2 workflow returns av DESeqObject, list of deseq::results (for each strain pairing), the counts table, design table, and annotation table. (The design and annotation tables are the same for each. Annotation tables will be sized down later in the analysis.)
+
+Each dataset being run through:
+*Full experiment: without plasmid counts and without both plasmid and chromosome 3
+*TilS subset: without just plasmid and without both plasmid and chromosome 3
+*PPC subset: without just plasmid and without both plasmid and chromosome 3
+
+```{r}
+resultsFull <- des_workflow("data", "results/DESeq2_Results_Full","abundance.all.matrix.tsv", "plmd", "abundance.all.design.tsv", "annotations.tsv")
+dOfull <- resultsFull[[1]]
+drfull <- resultsFull[[2]]
+counts_full <- resultsFull[[3]]
+design_full <- resultsFull[[4]]
+table_annotations <- resultsFull[[5]]
+
+#And without chromosome 3
+resultsFull <- des_workflow("data", "results/DESeq2_Results_Full/noChrom3","abundance.all.matrix.tsv", "both", "abundance.all.design.tsv", "annotations.tsv")
+dOf <- resultsFull[[1]]
+drf <- resultsFull[[2]]
+cf <- resultsFull[[3]]
+
+```
+
+
+```{r}
+resultsTilS <- des_workflow("data", "results/DESeq2_Results_TilS", "abundance.TilS.matrix.tsv", "plmd", "abundance.TilS.design.tsv", "annotations.tsv")
+dOTilS <- resultsTilS[[1]]
+drTilS <- resultsFull[[2]]
+counts_TilS <- resultsFull[[3]]
+design_TilS <- resultsFull[[4]]
+
+#without chr3
+resultsTilS <- des_workflow("data", "results/DESeq2_Results_TilS/noChrom3", "abundance.TilS.matrix.tsv", "both", "abundance.TilS.design.tsv", "annotations.tsv")
+dOT <- resultsTilS[[1]]
+drT <- resultsFull[[2]]
+cT <- resultsFull[[3]]
+```
+
+```{r}
+resultsFull <- des_workflow("data", "results/DESeq2_Results_PPC","abundance.PPC.matrix.tsv", "plmd", "abundance.PPC.design.tsv", "annotations.tsv")
+dOPPC <- resultsFull[[1]]
+drPPC <- resultsFull[[2]]
+counts_PPC <- resultsFull[[3]]
+design_PPC <- resultsFull[[4]]
+
+#without Chr 3
+resultsFull <- des_workflow("data", "results/DESeq2_Results_PPC/noChrom3","abundance.PPC.matrix.tsv", "plmd", "abundance.PPC.design.tsv", "annotations.tsv")
+dOP <- resultsFull[[1]]
+drP <- resultsFull[[2]]
+cP <- resultsFull[[3]]
+```
+
+Now, creating a list of all of the objects and results to help process faster. The nameKey is ordered the same as the list, and then each item is named accordingly. (Most of the batching is being done later by only passing the name key to lapply(), and modifying each element of the globablly-defined list from within the function, to be able to use the name of the dataset within the function.) 
+```{r}
+desObj <- list(dOfull, dOf, dOTilS, dOT, dOPPC, dOP)
+desRes <- list(drfull, drf, drTilS, drT, drPPC, drP)
+nameKey <- c("Full", "Full_nochr3", "TilS", "TilS_nochr3", "PPC", "PPC_nochr3")
+names(desObj) <- nameKey
+names(desRes) <- nameKey
+
+```
+
+## Filtering results
+Using padj < 0.1 as the cutoff. Create list of data frames with signficant genes only for each pairing, from within the list of datasets. (Adding annotation description column, too.)
+```{r}
+desResSig <- lapply(desRes, function(matrixof) {
+  lapply(matrixof[ ,1], function(df) {
+    newdf <- df[order(df$pvalue), ]
+    newdf <- subset(newdf, padj<0.1)
+    newdf <- as.data.frame(newdf)
+    newdf <- tibble::rownames_to_column(newdf, var="Gene")
+    shortAno <- table_annotations[table_annotations$locusTag %in% newdf$Gene, ]
+    newdf$annotation <- shortAno$name
+    return (newdf)
+  })
+})
+```
+
+Collating pairwise results for each dataset, and writing to csv file in main results folder. Each gene can be listed multiple times, but will have column entries denoting with mutant compared to which mutant.
+```{r}
+
+desResCol <- lapply(nameKey, function(listitem){
+  wordList <- as.list(names(desResSig[[listitem]]))
+  newdf <- mapply( function(df, w ) {words <- unlist(strsplit(w, "_to_", fixed=TRUE))
+    df <- cbind( df, "mutant"=rep(words[[1]], nrow(df)),
+                        "comparedTo"=rep(words[[2]], nrow(df)))
+    }, desResSig[[listitem]], wordList, SIMPLIFY = FALSE, USE.NAMES = FALSE)
+  collated <- do.call(rbind, newdf)
+  newfile <- here::here("results", paste0("collated_sigRes_",listitem,".csv"))
+  write.csv(collated, file=newfile, row.names = FALSE)
+  return (collated)
+})
+```
+
+## Rlog transformations of each of the data sets.
+
+Using the rlog transformations, as the data set is less than 30. ([For reasoning](https://bioconductor.org/packages/release/workflows/vignettes/rnaseqGene/inst/doc/rnaseqGene.html#the-variance-stabilizing-transformation-and-the-rlog))
+
+The DESeq2Transform objects produced can be given to pcaExplorer as well.
+
+```{r}
+rld <- lapply(setNames(nameKey, nameKey), function(listitem){
+  rlog(desObj[[listitem]], blind=TRUE)
+})
+```
+
+Creating heatmaps from each of the rlog transformations.
+```{r}
+select <- vector("list", 8)
+select <- lapply(setNames(nameKey,nameKey), function(listitem){
+  order(rowMeans(counts(desObj[[listitem]], normalized=TRUE)), decreasing=TRUE)[1:20]
+})
+
+df <- as.data.frame(colData(desObj[[1]])[,c("strain","type")]) #this is just a key
+
+heatmaps <- lapply(setNames(nameKey,nameKey), function(listitem){
+  pheatmap(assay(rld[[listitem]])[select[[listitem]],], cluster_rows=FALSE, show_rownames=FALSE,
+           cluster_cols=FALSE, annoation_col=df, main = listitem)
+})
+```
+
+Clustering
+```{r}
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+
+sampleDists <- vector("list", 8)
+sampleDists <- lapply(setNames(nameKey,nameKey), function(listitem){
+  sampleDists[[listitem]] <- dist(t(assay(rld[[listitem]])))
+})
+# sampleDistMatrix <- lapply(setNames(nameKey,nameKey), function(listitem){
+#   as.matrix(sampleDists[[listitem]])
+# })
+# sampleDistMatrix <- lapply(nameKey, function(listitem){
+#   rownames(sampleDistMatrix[[listitem]]) <- paste(rld[[listitem]]$strain, rld[[listitem]]$replicate, sep="-")
+#  colnames(sampleDistMatrix[[listitem]]) <- NULL #In lapply, this is deleting whole element, instead of colnames.
+# })
+```
+
+Clustering individually because I can't get lapply to work.
+```{r}
+sampleDistMatrixfull <- as.matrix(sampleDists[["Full"]])
+rownames(sampleDistMatrixfull) <- paste(rld[["Full"]]$strain, rld[["Full"]]$replicate, sep="-")
+colnames(sampleDistMatrixfull) <- NULL
+pheat_full <- pheatmap(sampleDistMatrixfull,
+         clustering_distance_rows=sampleDists[["Full"]],
+         clustering_distance_cols=sampleDists[["Full"]],
+         col=colors, main = "Full data, no plasmid")
+fname <- here::here("results", "rldClustering_Full.pdf" )
+pdf(file = fname)
+dev.set(which = 2)
+dev.copy(which = 4)
+dev.off()
+
+sampleDistMatrixfullno3 <- as.matrix(sampleDists[[2]])
+rownames(sampleDistMatrixfullno3) <- paste(rld[[2]]$strain, rld[[2]]$replicate, sep="-")
+colnames(sampleDistMatrixfullno3) <- NULL
+pheat_full_nochr3 <- pheatmap(sampleDistMatrixfullno3,
+         clustering_distance_rows=sampleDists[[2]],
+         clustering_distance_cols=sampleDists[[2]],
+         col=colors, main = "Full data, no plasmid or chromosome 3")
+fname <- here::here("results", "rldClustering_Fullnochr3.pdf" )
+pdf(file = fname)
+dev.set(which = 2)
+dev.copy(which = 4)
+dev.off()
+
+```
+
+```{r}
+sampleDistMatrixTilS <- as.matrix(sampleDists[[3]])
+rownames(sampleDistMatrixTilS) <- paste(rld[[3]]$strain, rld[[3]]$replicate, sep="-")
+colnames(sampleDistMatrixTilS) <- NULL
+pheat_TilS <- pheatmap(sampleDistMatrixTilS,
+         clustering_distance_rows=sampleDists[[3]],
+         clustering_distance_cols=sampleDists[[3]],
+         col=colors, main = "TilS subset, no plasmid")
+fname <- here::here("results", "rldClustering_TilS.pdf" )
+pdf(file = fname)
+dev.set(which = 2)
+dev.copy(which = 4)
+dev.off()
+
+sampleDistMatrixTilSno3 <- as.matrix(sampleDists[[4]])
+rownames(sampleDistMatrixTilSno3) <- paste(rld[[4]]$strain, rld[[4]]$replicate, sep="-")
+colnames(sampleDistMatrixTilSno3) <- NULL
+pheat_TilS_nochr3 <- pheatmap(sampleDistMatrixTilSno3,
+         clustering_distance_rows=sampleDists[[4]],
+         clustering_distance_cols=sampleDists[[4]],
+         col=colors, main = "TilS subset, no plasmid or chromosome 3")
+fname <- here::here("results", "rldClustering_TilSnochr3.pdf" )
+pdf(file = fname)
+dev.set(which = 2)
+dev.copy(which = 4)
+dev.off()
+```
+
+```{r}
+sampleDistMatrixPPC <- as.matrix(sampleDists[[5]])
+rownames(sampleDistMatrixPPC) <- paste(rld[[5]]$strain, rld[[5]]$replicate, sep="-")
+colnames(sampleDistMatrixPPC) <- NULL
+pheat_PPC <- pheatmap(sampleDistMatrixPPC,
+         clustering_distance_rows=sampleDists[[5]],
+         clustering_distance_cols=sampleDists[[5]],
+         col=colors, main = "PPC subset, no plasmid")
+fname <- here::here("results", "rldClustering_PPC.pdf" )
+pdf(file = fname)
+dev.set(which = 2)
+dev.copy(which = 4)
+dev.off()
+
+sampleDistMatrixPPCno3 <- as.matrix(sampleDists[[6]])
+rownames(sampleDistMatrixPPCno3) <- paste(rld[[6]]$strain, rld[[6]]$replicate, sep="-")
+colnames(sampleDistMatrixPPCno3) <- NULL
+pheat_PPC_nochr3 <- pheatmap(sampleDistMatrixPPCno3,
+         clustering_distance_rows=sampleDists[[6]],
+         clustering_distance_cols=sampleDists[[6]],
+         col=colors, main = "PPC subset, no plasmid or chromosome 3")
+fname <- here::here("results", "rldClustering_PPCnochr3.pdf" )
+pdf(file = fname)
+dev.set(which = 2)
+dev.copy(which = 4)
+dev.off()
+```
+
+## PCA plots
+
+Set a color scheme so that each mutant stays the same color.
+```{r}
+strainColors <- setNames(c("darkviolet", "dodgerblue3", "firebrick1", "green3",
+                           "sienna3", "springgreen3", "cyan2", "orange2"), levels(design_full$strain))
+```
+
+Create, save, and store pca plots. (dimentions could be defined in the ggsave call)
+```{r}
+dir.create(here::here("results","pca"), showWarnings = FALSE)
+pcas <- lapply(setNames(nameKey,nameKey), function(listitem) {
+  pcaData <- plotPCA(rld[[listitem]], intgroup=c("strain", "type"), returnData=TRUE)
+  percentVar <- round(100 * attr(pcaData, "percentVar"))
+  fname <- here::here("results", "pca", paste0("pcaPlot_", listitem, ".pdf"))
+  p <- ggplot(pcaData, aes(PC1, PC2, color=strain, shape=type)) +
+    geom_point(size=3) +
+    xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+    ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+    coord_fixed() +
+    ggtitle(paste0("Principle Component Analysis, ",listitem)) +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    scale_color_manual(values = strainColors)
+  ggsave(fname, device = "pdf")
+  plot(p)
+})
+```
+
+## PCA explorer
+
+Creating a column that pcaExplorer expects, with the locus tag and annotation
+```{r}
+table_annotations$gene_name <- paste(table_annotations$locusTag, table_annotations$name, sep="-")
+```
+
+Running pcaExplorer on each data set. Mostly interested in the TilS and PPC subsets. Saving the top/bottom loading genes, and the variance explained by PC.
+```{r}
+pcaExplorer(dds = desObj[["Full"]], dst = rld[["Full"]], coldata = design_full, annotation = table_annotations)
+```
+
+```{r}
+pcaExplorer(dds = desObj[["Full_nochr3"]], dst = rld[["Full_nochr3"]], coldata = design_full, annotation = table_annotations)
+```
+
+```{r}
+pcaExplorer(dds = desObj[["TilS"]], dst = rld[["TilS"]], coldata = design_full, annotation = table_annotations)
+```
+```{r}
+pcaExplorer(dds = desObj[["TilS_nochr3"]], dst = rld[["TilS_nochr3"]], coldata = design_full, annotation = table_annotations)
+```
+```{r}
+pcaExplorer(dds = desObj[["PPC"]], dst = rld[["PPC"]], coldata = design_full, annotation = table_annotations)
+```
+```{r}
+pcaExplorer(dds = desObj[["PPC_nochr3"]], dst = rld[["PPC_nochr3"]], coldata = design_full, annotation = table_annotations)
+```
+
+Overall: Removing chromosome 3 seems to affect the TilS subset but not PPC. PPC's variance is also mostly defined in one PC.
+
+## Filtering, not by log2 differential
+
+Creating lists of highest variance genes (cutoff of 20), comparing with the average across all of the counts for particular genes. Because this takes into account variance, PPC and TilS should definitely be separated as the PPC counts are considerably lower.
+
+```{r}
+
+topVarGenes <- lapply(setNames(nameKey,nameKey), function(listitem){
+  head(order(rowVars(assay(rld[[listitem]])), decreasing = TRUE), 20)
+})
+
+topVarEntries <- vector("list", length(nameKey))
+topVarEntries <- lapply(setNames(nameKey, nameKey), function(listitem){
+  topVarEntries[[listitem]]  <- assay(rld[[listitem]])[ topVarGenes[[listitem]], ]
+})
+
+gpheat <- lapply(setNames(nameKey, nameKey), function(listitem){
+  mat  <- topVarEntries[[listitem]] - rowMeans(topVarEntries[[listitem]])
+  anno <- as.data.frame(colData(rld[[listitem]])[, c("strain","type")])
+  fname <- here::here("results", paste0("geneVarCluster_", listitem, ".pdf"))
+
+  pdf(file=fname) # to save the pdf
+  pheatmap(mat, annotation_col = anno, main = listitem)
+  dev.off() # closes pdf
+})
+```
+Save results
+```{r}
+topVarEntriesAno <- vector("list", length(nameKey))
+topVarEntriesAno <- lapply(setNames(nameKey, nameKey), function(listitem){
+  topVarEntriesAno[[listitem]] <- tibble::rownames_to_column(as.data.frame(topVarEntries[[listitem]]), var="locusTag")
+  shortAno <- table_annotations[table_annotations$locusTag %in% topVarEntriesAno[[listitem]]$locusTag, ]
+  topVarEntriesAno[[listitem]]$name <- shortAno$name
+  fname <- here::here("results", paste0("TopVarianceGenes_",listitem,".csv"))
+  write.csv(topVarEntriesAno[[listitem]], file=fname, row.names=FALSE)
+})
+```
+
+#### Testing the gviz integration:
+
+```{r}
+library(GenomicFeatures)
+gtfFile <- here::here("GCA_000203955.1_ASM20395v1_genomic.gtf")
+# txDB <- makeTxDbFromGFF(gtfFile, format="gtf")
+
+# resGR <- lfcShrink(tester, coef="strain_A244T_vs_WT", type="apeglm", format="GRanges")
+# resGR
+```
+Need rtrack information, or GRanges, or something like that.
+
+#### Other apporach
+```{r}
+txdb <- makeTxDbFromGFF(here::here("data", "references", "GCA_000203955.1_ASM20395v1_genomic.gff"))
+txdbRS <- makeTxDbFromGFF(here::here("data", "references", "GCF_000203955.1_ASM20395v1_genomic.gff"))
+txdb
+```
+(note, using the GenBank one. Trascipt and exon count is the same, cds is different.) (The RefSeq one dropped gene-BCEN2424_RS16455, gene-BCEN2424_RS17110, gene-BCEN2424_RS33785, gene-BCEN2424_RS34535OK.)
+
+(Having trouble using seqlevels with multiple chromosomes, so just combining multiple GRanges of transcripts)
+(see keys, keytypes, and select from GenomicFeatures for ways to pull genes of choice)
+Trying everything:
+```{r}
+head(seqlevels(txdb))
+seqlevels(txdb) <- "CP000458.1"
+ts <- vector("list", 3)
+ts[[1]] <- transcripts(txdb)
+seqlevels(txdb) <- "CP000459.1"
+ts[[2]] <- transcripts(txdb)
+seqlevels(txdb) <- "CP000460.1"
+ts[[3]] <- transcripts(txdb)
+
+tscripts <- c(ts[[1]], ts[[2]], ts[[3]])
+tail(tscripts)
+tscriptsno3 <- c(ts[[1]], ts[[2]])
+tail(tscriptsno3)
+seqlevels(txdb) <- seqlevels0(txdb) #Reset the filtering
+```
+
+*Having problems matching things up, I'm guessing because the annotation table used to construct the DESeqObject doesn't have the same number of features as the transcript objects.*
+
+Trying to find out where the problems are:
+Can try to find overlaps/gaps/see how many entries when disjointed using GRanges functions
+Can try to find if there are multiple etnries per locus_tag
+```{r}
+gaps(tscripts)
+reduced <- reduce(tscripts)
+disjoin <- (tscripts)
+```
+nrow(dOTilS) is 6763 (chromosomes 1, 2, and 3)
+length(tscripts) is 6849
+length(reduced) is 6067
+
+```{r}
+namelist <- mcols(tscripts)$tx_name
+missingfeatures <- setdiff(namelist, rownames(dOTilS))
+missingfeatures
+```
+No RNA features are in the deseq objects.
+
+Check that there aren't any repeated tx_names, then setting names by that column.
+```{r}
+namelist[duplicated(namelist)]
+names(tscripts) <- mcols(tscripts)$tx_name
+```
+Going to ... isolate the rna features, add them onto the annotation table, and then rerurn deseq. This might change some results... (Orginally, the annotation table could have been built using the TxDB function with the same refernce so that the number of features was identical/built in. I'm still not sure how the rest of the table was generated. )
+As a note, this only adds back RNA for chromosomes 1-3. RNA for plasmid 1 is not included in this regenerated table.
+```{r}
+missingRNA <- tscripts[missingfeatures]
+df <- as.data.frame(missingRNA)
+df$tx_name <- sub("rna-", "", df$tx_name)
+df <- rename(df, "seqnames"="genomic_accession", "width"="feature_interval_length", "tx_name"="locusTag")
+df <- subset(df, select=-tx_id)
+df$seqdouble <- lapply(df$genomic_accession, function(acc){
+  if (acc == "CP000458.1") return("chromosome 1")
+  else if (acc == "CP000459.1") return ("chromosome 2")
+  else if (acc == "CP000460.1") return ("chromosome 3")
+})
+df <- df %>% separate(seqdouble, c("seq_type", "chromosome"), remove=TRUE)
+assembly <- rep("GCA_000203955.1", nrow(df))
+classRename <- rep("RNA", nrow(df))
+newdf <- cbind(df, "assembly"=assembly, "class"=classRename)
+newcolumns <- setdiff(colnames(table_annotations), colnames(newdf)) #missing columns
+newdf[,newcolumns] <- NA # fill with blanks
+newdf <- newdf[, colnames(table_annotations)] #set the same order
+new_annotations <- rbind(table_annotations, newdf)
+new_annotations <- new_annotations[order(new_annotations$start),] #ordering by start position, just in case
+new_annotations <- subset(new_annotations, select=-gene_name) # remove to work in the script
+write.table(new_annotations, here::here("data", "new_annotations.tsv"), quote=FALSE, sep='\t', row.names=FALSE) #save as a tsv
+```
+ Time for a new notebook. Going to restart with new reference for kallisto and annotations that includes the RNA features. See notebook 3.

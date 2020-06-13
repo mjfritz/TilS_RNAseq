@@ -1,0 +1,22 @@
+{
+    "read_files": "[ A244T_2.fastq.gz ]",
+    "expected_format": "SF",
+    "compatible_fragment_ratio": 1.0,
+    "num_compatible_fragments": 9397382,
+    "num_assigned_fragments": 9397382,
+    "num_frags_with_concordant_consistent_mappings": 9395727,
+    "num_frags_with_inconsistent_or_orphan_mappings": 1655,
+    "strand_mapping_bias": 0.9998238871209024,
+    "MSF": 0,
+    "OSF": 0,
+    "ISF": 0,
+    "MSR": 0,
+    "OSR": 0,
+    "ISR": 0,
+    "SF": 9395727,
+    "SR": 1655,
+    "MU": 0,
+    "OU": 0,
+    "IU": 0,
+    "U": 0
+}

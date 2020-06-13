@@ -1,0 +1,12 @@
+{
+    "salmon_version": "1.2.1",
+    "index": "../indeces/HI2424_salmon_index",
+    "libType": "A",
+    "unmatedReads": "P421L_2.fastq.gz",
+    "fldMean": "75",
+    "fldSD": "2",
+    "threads": "8",
+    "validateMappings": [],
+    "output": "quants/P421L_2_quant",
+    "auxDir": "aux_info"
+}
