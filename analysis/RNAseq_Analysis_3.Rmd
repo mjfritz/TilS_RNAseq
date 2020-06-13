@@ -45,9 +45,7 @@ parse_GB_annotation filters out the duplicate information, writes a .tsv file fo
 featurefile <- here::here("data", "references", "GCF_000203955.1_ASM20395v1_feature_table.txt")
 anno_table <- parse_RS_annotation(featurefile) # For RefSeq, use parse_GB_annotation for GenBank
 nrow(anno_table)
-
 ```
-
 
 ## Collect kallisto data into abundance table
 Made new abundance tables using Chris Deitrick's "run_on_kallisto.py" script, giving the new annotation table. (Moved old abundance tables into old_tables folder.)
@@ -63,6 +61,15 @@ And downloaded the three abundance tables. (These DESeq2 scripts only use the .m
 allMatrix <- read_table_counts(here::here("data", "abundance.all.matrix.tsv"))
 nrow(allMatrix)
 allDesign <- read_table_design(here::here("data", "abundance.all.design.tsv"))
+locusKey <- row.names(anno_table)
+names(locusKey) <- anno_table$RSlocusTag
+
+for ( listitem in names(locusKey)){
+  if (listitem %in% rownames(allMatrix)){
+     rownames(allMatrix)[ rownames(allMatrix) == listitem] <- locusKey[[listitem]]
+  } 
+}
+
 annonames <- rownames(anno_table)
 matrixnames <- rownames(allMatrix)
 missingnames <- annonames[!(annonames %in% matrixnames)]
@@ -104,15 +111,21 @@ rm(desOutFull, desOutTilS, desOutPPC, doFull, doTilS, doPPC) # Clean up
 
 ## Filtering and collating pairwise results
 Using padj < 0.1 as the cutoff. Create list of data frames with signficant genes only for each pairing, from within the list of datasets. (Adding annotation description column, too.)
+(Old way gave wrong "name" to genes.)
 ```{r}
 desresSig <- lapply(desres, function(matrixof) {
   lapply(matrixof[ ,1], function(df) {
     newdf <- df[order(df$pvalue), ]
     newdf <- subset(newdf, padj<0.1)
     newdf <- as.data.frame(newdf)
-    newdf <- tibble::rownames_to_column(newdf, var="Gene")
-    shortAno <- anno_table[anno_table$locusTag %in% newdf$Gene, ]
-    newdf$annotation <- shortAno$name
+    # newdf <- tibble::rownames_to_column(newdf, var="Gene")
+    
+    newanno <- vector("character", nrow(newdf))
+    names(newanno) <- rownames(newdf)
+    for (listitem in rownames(newdf)){
+      newanno[listitem] <- anno_table[listitem, "name"]
+    }
+    newdf <- merge(newdf, as.data.frame(newanno), by="row.names", all=TRUE)
     return (newdf)
   })
 })
@@ -197,7 +210,7 @@ rldclusters <- lapply(nameKey, function(listitem){
 ## Clustering by top variance (not using log2 differential)
 
 Creating lists of highest variance genes (cutoff of 20), comparing with the average across all of the counts for each gene within the rlog transformed data set in order to cluster. Because this takes into account variance, PPC and TilS should definitely be separated as the PPC counts are considerably lower. saving tables and plots.
-
+(Old way gave wrong "name" to genes.)
 ```{r}
 
 topVarGenes <- lapply(setNames(nameKey,nameKey), function(listitem){
@@ -210,9 +223,16 @@ topVarEntries <- lapply(setNames(nameKey, nameKey), function(listitem){
 dir.create(here::here("results", "topGenes_byVariance_acrossDataset"), showWarnings = FALSE)
 topVarEntriesAno <- vector("list", length(nameKey))
 topVarEntriesAno <- lapply(setNames(nameKey, nameKey), function(listitem){
-  topVarEntriesAno[[listitem]] <- tibble::rownames_to_column(as.data.frame(topVarEntries[[listitem]]), var="locusTag")
-  shortAno <- anno_table[anno_table$locusTag %in% topVarEntriesAno[[listitem]]$locusTag, ]
-  topVarEntriesAno[[listitem]]$name <- shortAno$name
+
+  topVarEntriesAno[[listitem]] <- as.data.frame(topVarEntries[[listitem]])
+  newanno <- vector("character", nrow(topVarEntriesAno[[listitem]]))
+  names(newanno) <- rownames(topVarEntriesAno[[listitem]])
+    
+  for (entries in rownames(topVarEntries[[listitem]])){
+    newanno[entries] <- anno_table[entries, "name"]
+  }
+  topVarEntriesAno[[listitem]] <- merge(topVarEntriesAno[[listitem]], as.data.frame(newanno), by="row.names", all=TRUE)
+
   fname <- here::here("results", "topGenes_byVariance_acrossDataset", paste0("TopVarianceGenes_",listitem,".csv"))
   write.csv(topVarEntriesAno[[listitem]], file=fname, row.names=FALSE)
 })
@@ -272,6 +292,8 @@ Also, trying to save more than 15 top/bottom loading genes in the sample tab los
 Settings: Let nr of most variant gene be 300.
 The loadings plots need to be spaced out better in Inkscape. (I think that those loadings are the same as the top variance genes calculated earlier. But would like to verify and look to plot the CI ovals manually for more control?)
 Also able to to see what it looks like to leave out N445K3 and tRNA2 as possible outliers. Groupings don't change too much.
+
+
 ```{r}
 pcaExplorer(dds = dds[["TilS"]], dst = rld[["TilS"]], coldata = tilSDesign, annotation = anno_table)
 ```
@@ -299,7 +321,7 @@ Table export options are down at the bottom of the genes panel: look at tightly 
 # Gviz?
 *Current goals:*
 
-*Re-sizing and formatting the pcaExplorer top/bottom loading figures
+*Update pcaExplorer figures, re-sizing and formatting the pcaExplorer top/bottom loading figures
 *Attaching the GRanges data to the DESEqDataSets.
   +Do I need rtracklayer?
 *gviz up and running, requires pairwise comparisons... and grange, and lfcShrink

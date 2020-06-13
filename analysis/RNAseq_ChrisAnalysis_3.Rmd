@@ -1,0 +1,174 @@
+---
+title: "RNAseq Analysis with kallisto/Chris Deitrick, pt. 3"
+output: html_notebook
+---
+```{r}
+library(dplyr)
+library(tidyverse)
+library(DESeq2)
+library(knitr)
+library(apeglm)
+library(here)
+library(pcaExplorer)
+library(genefilter)
+library(pheatmap)
+library(RColorBrewer)
+source(here("scripts", "deseq_workflow_expanded_mk3.r"), local=TRUE, echo=FALSE)
+```
+
+# Setup again
+
+A long string of notebooks. Previously, I had found that ribosomal RNA reads (86 features) were missing from the annotation tables, so I  shuffled the original output into the "old" folder to save.
+
+## Rerun kallisto with expanded index
+The file I used to make the kallisto index did not include the rna transcripts, but they were included another file. So, I have appended both the _cds_from_genomic.fna and _rna_from_genomic.fna files together in a text editor, and saved as _cds_and_rna_from_genomic_unordered.fna. (Pushed them to my Beagle folder: /home/mjf123/BcenHI2424/TilS/TilS_RNA/data/indeces/)
+
+On Beagle, in the ~/mjf123/BcenHI2424/TilS/TilS_RNA/data/indeces/ folder:
+```{linux}
+module load kallisto
+kallisto index --index=HI2424.cds.index GCA_000203955.1_ASM20395v1_cds_and_rna_from_genomic_unordered.fna
+sh ../../scripts/TilSkallisto.sh
+```
+
+
+## Making a new feature table
+
+As for the annotation table, GenBank has a cleaner version than what I had patched together listed as a tab-delineated _feature_table.txt. Every feature appears to be listed twice, once as a gene and then again as cds/RNA. The second listing has most of the information, except for the RNA feature that are missing an entry under "class." (But not all entries are actually doubled, splitting them by even/odd indexes does not produce matching lists of locus_tags)
+
+parse_GB_annotation filters out the duplicate information, writes a .tsv file for the run_on_kallisto.py script to use, and returns the annotation table.
+
+```{r}
+
+featurefile <- here::here("data", "references", "GCA_000203955.1_ASM20395v1_feature_table.txt")
+anno_table <- parse_GB_annotation(featurefile)
+nrow(anno_table)
+
+```
+
+
+## Collect kallisto data into abundance table
+Made new abundance tables using Chris Deitrick's "run_on_kallisto.py" script, giving the new annotation table. (Moved old abundance tables into old_tables folder, and renamed the new table to "new_annotations.tsv")
+On beagle, from ~/BcenHI2424/TilS/TilS_RNA/:
+```{python}
+python scripts/run_on_kallisto.py --reference data/indeces/GCA_000203955.1_ASM20395v1_cds_and_rna_from_genomic_unordered.fna --folder results/results_kallisto/ --filename results/abundance.all.tsv --annotations data/new_annotations.tsv
+```
+
+## Subsetting the data
+And downloaded the three abundance tables. (These DESeq2 scripts only use the .matrix.tsv and .design.tsv)
+
+```{r}
+allMatrix <- read_table_counts(here::here("data", "abundance.all.matrix.tsv"))
+nrow(allMatrix)
+allDesign <- read_table_design(here::here("data", "abundance.all.design.tsv"))
+annonames <- rownames(anno_table)
+matrixnames <- rownames(allMatrix)
+missingnames <- annonames[!(annonames %in% matrixnames)]
+missing <- anno_table[missingnames, ]
+```
+As a note, the counts table does not have rows for the 26 pseudo genes. This may be because the pseudo genes aren't in the fasta files used to run kallisto. *Not sure how to include these yet.*
+
+Subetting first by type in the design tables, then using the design table names to subset the matrices.
+```{r}
+tilSDesign <- allDesign[(allDesign$type %in% "tils"), ]
+tilSMatrix <- allMatrix[ , rownames(tilSDesign)]
+ppcDesign <- allDesign[(allDesign$type %in% "ppc") | (allDesign$strain == "WT"), ]
+ppcMatrix <- allMatrix[ , rownames(ppcDesign)]
+```
+
+# Rerunning DESeq2 with new annotation tables
+Now, re-run everthing else....
+
+```{r}
+# Full data set: with and without chromosome 3
+desOutFull <- des_workflow("results/DESeq2_Results_Full", allMatrix, "plmd", allDesign, anno_table)
+doFull <- des_workflow("results/DESeq2_Results_Full_noChrom3", allMatrix, "both", allDesign , anno_table)
+
+# TilS subset: with and without chromosome 3
+desOutTilS <- des_workflow("results/DESeq2_Results_TilS", tilSMatrix, "plmd", tilSDesign, anno_table)
+doTilS <- des_workflow("results/DESeq2_Results_TilS_noChrom3", tilSMatrix, "both", tilSDesign , anno_table)
+
+# PPC subset: with and without chromosome 3
+desOutPPC <- des_workflow("results/DESeq2_Results_PPC", ppcMatrix, "plmd", ppcDesign, anno_table)
+doPPC <- des_workflow("results/DESeq2_Results_PPC_noChrom3", ppcMatrix, "both", ppcDesign , anno_table)
+
+dds <- list(desOutFull[[1]], doFull[[1]], desOutTilS[[1]], doTilS[[1]], desOutPPC[[1]], doPPC[[1]])
+desres <- list(desOutFull[[2]], doFull[[2]], desOutTilS[[2]], doTilS[[2]], desOutPPC[[2]], doPPC[[2]])
+nameKey <- c("Full", "Full_nochr3", "TilS", "TilS_nochr3", "PPC", "PPC_nochr3")
+names(dds) <- nameKey
+names(desres) <- nameKey
+rm(desOutFull, desOutTilS, desOutPPC, doFull, doTilS, doPPC) # Clean up
+```
+
+## Filtering and collating pairwise results
+Using padj < 0.1 as the cutoff. Create list of data frames with signficant genes only for each pairing, from within the list of datasets. (Adding annotation description column, too.)
+```{r}
+desresSig <- lapply(desres, function(matrixof) {
+  lapply(matrixof[ ,1], function(df) {
+    newdf <- df[order(df$pvalue), ]
+    newdf <- subset(newdf, padj<0.1)
+    newdf <- as.data.frame(newdf)
+    newdf <- tibble::rownames_to_column(newdf, var="Gene")
+    shortAno <- anno_table[anno_table$locusTag %in% newdf$Gene, ]
+    newdf$annotation <- shortAno$name
+    return (newdf)
+  })
+})
+```
+
+Collating pairwise results for each dataset, and writing to csv file in main results folder. Each gene can be listed multiple times, but will have column entries denoting with mutant compared to which mutant.
+```{r}
+
+desresCol <- lapply(nameKey, function(listitem){
+  wordList <- as.list(names(desresSig[[listitem]]))
+  newdf <- mapply( function(df, w ) {words <- unlist(strsplit(w, "_to_", fixed=TRUE))
+    df <- cbind( df, "mutant"=rep(words[[1]], nrow(df)),
+                        "comparedTo"=rep(words[[2]], nrow(df)))
+    }, desresSig[[listitem]], wordList, SIMPLIFY = FALSE, USE.NAMES = FALSE)
+  collated <- do.call(rbind, newdf)
+  newfile <- here::here("results", paste0("collated_sigRes_",listitem,".csv"))
+  write.csv(collated, file=newfile, row.names = FALSE)
+  return (collated)
+})
+```
+
+## Rlog transformation
+
+### Clustering
+
+## PCA plots
+
+
+
+
+
+
+*Current goals:*
+
+Version checks, packages too. (R 3.6.3, RStudio 1.2.5033)
+
+Run the rest of the kallisto workflow.
+
+Get annotation table figured out.
+*Test if all entries are double listed.
+*Even/odd split? Compare?
+*What is missing from the (!gene) list? Test if 
+
+Complete rest of workflow.
+Produce all of the plots, save copies. Save tables. Post them.
+
+
+
+
+
+Attaching the GRanges data to the DESEqDataSets.
+
+*List of significant genes??
+
+*Finish grabbing pcaExplorer figures
+*gviz up and running, requires pairwise comparisons... and grange, and lfcShrink
+  -Currently trying to get Genomic Features to run, isn't cooperating with the gtf file. Manually pull from an imported file?
+  -rTrackLayer might be a good shot
+  -load info from genbankr go, page up with how to modify rowRanges
+
+
+remove tRNA from TilS set?

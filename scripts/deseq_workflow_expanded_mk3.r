@@ -8,11 +8,11 @@ read_table_counts <- function(filename){
   return(table_counts)
 }
 filtering <- function(df, exclusions){
-# For filtering TilS by chromosome/plasmid
+  # For filtering TilS by chromosome/plasmid
   parts <- list(  chr3=paste0("Bcen2424_", seq(5867,6788)),
                   plmd=paste0("Bcen2424_", seq(6789,6947)),
                   both=paste0("Bcen2424_", seq(5867,6947))
-                  )
+  )
   
   table_counts <- df[ !(row.names(df) %in% parts[[exclusions]]), ]
   
@@ -152,9 +152,9 @@ run_pca_interactive <- function(deseq_object, table_design){
 
 
 des_workflow <- function(resfolder, count_matrix, exclusions, table_design, table_annotations){
-# Expects datafolder and resfolder pathed from the project folder, and matrix and design tables as data frames,
-# annotationsdf in R data.frame/matrix format,
-# and the exclusions as a choice from chr3, plmd, or both.
+  # Expects datafolder and resfolder pathed from the project folder, and matrix and design tables as data frames,
+  # annotationsdf in R data.frame/matrix format,
+  # and the exclusions as a choice from chr3, plmd, or both.
   
   project_folder <- here()
   
@@ -193,8 +193,8 @@ des_workflow <- function(resfolder, count_matrix, exclusions, table_design, tabl
 }
 
 parse_GB_annotation <- function(filename){
-# Expects the file location of the GenBank _feature_table.txt as a string.
-# Returns the cleaned feature table, original feature table, and indeces of non-unique entries  
+  # Expects the file location of the GenBank _feature_table.txt as a string.
+  # Returns the cleaned feature table, original feature table, and indeces of non-unique entries  
   
   # Read in the data frame and reformat
   GB_frame <- read.csv(filename, sep = "\t", stringsAsFactors = FALSE, row.names = NULL)
@@ -218,9 +218,9 @@ parse_GB_annotation <- function(filename){
       u_features[count, ] <- GB_frame[i, ]
       u_list[count] <- GB_frame[i, "locusTag"]
       count <- count+1
-    # } else {
-    #   not_unique[not_count] <- i
-    #   not_count <- not_count+1
+      # } else {
+      #   not_unique[not_count] <- i
+      #   not_count <- not_count+1
     }
   }
   
@@ -241,8 +241,8 @@ parse_GB_annotation <- function(filename){
 }
 
 parse_RS_annotation <- function(filename){
-# Expects the file location of the RefSeq _feature_table.txt as a string.
-# Returns the cleaned feature table and original feature table.
+  # Expects the file location of the RefSeq _feature_table.txt as a string.
+  # Returns the cleaned feature table and original feature table.
   
   # Read in the data frame and reformat
   RS_frame <- read.csv(filename, sep = "\t", stringsAsFactors = FALSE, row.names = NULL)
@@ -260,7 +260,7 @@ parse_RS_annotation <- function(filename){
     ind <- 2
     otherind <-1
   }
-
+  
   # Format the data table
   rownames(splits[[ind]]) <- splits[[ind]][ ,1]
   rownames(splits[[otherind]]) <- splits[[ind]][ ,1]
@@ -271,12 +271,33 @@ parse_RS_annotation <- function(filename){
       splits[[ind]][i, "attributes"] <- splits[[otherind]][i, "attributes"]
     }
   }
-
+  anno_table <- splits[[ind]]
+  
+  gbLocusTag <- vector("character", nrow(anno_table))
+  gbLocusTag <- lapply( row.names(anno_table), function(listitem){
+    query <- anno_table[listitem, "attributes"]
+    if ( query == "") ntag <- anno_table[listitem, "locusTag"]
+    else {
+      temp <- regmatches(query, regexpr("Bcen2424_\\d{4}", query))
+      if ( identical(temp, character(0)) ) ntag <- anno_table[listitem, "locusTag"]
+      else ntag <- temp
+    }
+    return(ntag)
+  })
+  
+  gbLocusTag <- unlist(gbLocusTag)
+  names(gbLocusTag) <- row.names(anno_table)
+  anno_table <- cbind(anno_table, gbLocusTag)
+  names(anno_table)[names(anno_table) == "locusTag"] <- "RSlocusTag"
+  names(anno_table)[names(anno_table) == "gbLocusTag"] <- "locusTag"
+  anno_table <- anno_table %>% dplyr::select("locusTag", everything())
+  row.names(anno_table) <- anno_table[ ,1]
+  
   # Save tab-delineated in same folder
   newname <- regmatches(filename, regexpr(".*/", filename))
   newfile <- paste0(newname, "RS.annotations.tsv")
-  write.table(splits[[ind]], file = newfile, row.names = FALSE, sep = "\t", na = "")
-  return (splits[[ind]])
+  write.table(anno_table, file = newfile, row.names = FALSE, sep = "\t", na = "")
+  return (anno_table)
 }
 
 clustering_plot <- function(sampledists, rld, colors, title, filepathname){
