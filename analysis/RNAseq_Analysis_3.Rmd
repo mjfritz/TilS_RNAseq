@@ -299,6 +299,7 @@ Table export options are down at the bottom of the genes panel: look at tightly 
 # Gviz?
 *Current goals:*
 
+*Re-sizing and formatting the pcaExplorer top/bottom loading figures
 *Attaching the GRanges data to the DESEqDataSets.
   +Do I need rtracklayer?
 *gviz up and running, requires pairwise comparisons... and grange, and lfcShrink
