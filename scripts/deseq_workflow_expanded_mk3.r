@@ -7,18 +7,21 @@ read_table_counts <- function(filename){
   
   return(table_counts)
 }
-filtering <- function(df, exclusions){
-  # For filtering TilS by chromosome/plasmid
-  parts <- list(  chr3=paste0("Bcen2424_", seq(5867,6788)),
-                  plmd=paste0("Bcen2424_", seq(6789,6947)),
-                  both=paste0("Bcen2424_", seq(5867,6947))
-  )
+
+filtering <- function(df, exclusions, anno){
+  # For filtering TilS by chromosome/plasmid with GB annotations
+  # parts <- list(  chr3=paste0("Bcen2424_", seq(5867,6788)),
+  #                 plmd=paste0("Bcen2424_", seq(6789,6947)),
+  #                 both=paste0("Bcen2424_", seq(5867,6947))
+  # )
   
-  table_counts <- df[ !(row.names(df) %in% parts[[exclusions]]), ]
+  # For filtering TilS by chromosome/plasmid with RF annotations
+  parts <- list( chr3="3", plmd="Plasmid1", both=c("3", "Plasmid1"))
+  ind <- anno$chromosome %in% parts[[exclusions]]
+  table_counts <- df[ !(ind), ]
   
   return(table_counts)
 }
-
 
 # read_table_annotations <- function(filename){
 #   table_annotations <- read.csv(filename, sep = "\t")
@@ -167,17 +170,8 @@ des_workflow <- function(resfolder, count_matrix, exclusions, table_design, tabl
   
   dir.create(here(resfolder), showWarnings = FALSE) 
   
-  print("Reading in the source tables...")
-  # Matrix of read counts
-  # print("Reading in the count matrix...")
-  # table_counts <- read_table_counts(filename_counts)
   print("Filtering count matrix...")
-  table_counts <- filtering(count_matrix, exclusions) #Toggle this to filter out chr3
-  
-  # print("Reading the design table...")
-  # table_design <- read_table_design(filename_design)
-  # print("Reading the annotations table...")
-  # table_annotations <- read_table_annotations(filename_annotations)
+  table_counts <- filtering(count_matrix, exclusions, table_annotations) #Toggle this to filter out chr3
   
   print("Running deseq...")
   deseq_tables <- run_deseq(table_counts, table_design, table_annotations, resfolder)
@@ -187,7 +181,6 @@ des_workflow <- function(resfolder, count_matrix, exclusions, table_design, tabl
   # generate_figure_clusters(deseq_object, filename_clusters) #I don't think these are saved, an will no longer work now that deseq_object is multiples
   
   #Will need to handle LFCshrink and pca in the main analysis part.
-  
   newlist <- list(deseq_object, deseq_results)
   return(newlist)  # Results are a list of the deseq object, results list
 }
@@ -273,6 +266,7 @@ parse_RS_annotation <- function(filename){
   }
   anno_table <- splits[[ind]]
   
+  #Re-naming to use GB locusTags
   gbLocusTag <- vector("character", nrow(anno_table))
   gbLocusTag <- lapply( row.names(anno_table), function(listitem){
     query <- anno_table[listitem, "attributes"]

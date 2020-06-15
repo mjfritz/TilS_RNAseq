@@ -61,19 +61,6 @@ And downloaded the three abundance tables. (These DESeq2 scripts only use the .m
 allMatrix <- read_table_counts(here::here("data", "abundance.all.matrix.tsv"))
 nrow(allMatrix)
 allDesign <- read_table_design(here::here("data", "abundance.all.design.tsv"))
-locusKey <- row.names(anno_table)
-names(locusKey) <- anno_table$RSlocusTag
-
-for ( listitem in names(locusKey)){
-  if (listitem %in% rownames(allMatrix)){
-     rownames(allMatrix)[ rownames(allMatrix) == listitem] <- locusKey[[listitem]]
-  } 
-}
-
-annonames <- rownames(anno_table)
-matrixnames <- rownames(allMatrix)
-missingnames <- annonames[!(annonames %in% matrixnames)]
-print(missingnames)
 ```
 As a note, the counts table does not have rows for the 26 pseudo genes. This may be because the pseudo genes aren't in the fasta files used to run kallisto. *Not sure how to include these yet.*
 
@@ -84,10 +71,11 @@ tilSMatrix <- allMatrix[ , rownames(tilSDesign)]
 ppcDesign <- allDesign[(allDesign$type %in% "ppc") | (allDesign$strain == "WT"), ]
 ppcMatrix <- allMatrix[ , rownames(ppcDesign)]
 ```
+Note: These are still in RefSeq format.
 
 # Rerunning DESeq2 with new annotation tables
 Now, re-run everthing else....
-
+(des_workflow includes switching to GB naming for the DESEq2DataSet and results. The allMatrix is still in RS.)
 ```{r}
 # Full data set: with and without chromosome 3
 desOutFull <- des_workflow("results/DESeq2_Results_Full", allMatrix, "plmd", allDesign, anno_table)
@@ -107,6 +95,15 @@ nameKey <- c("Full", "Full_nochr3", "TilS", "TilS_nochr3", "PPC", "PPC_nochr3")
 names(dds) <- nameKey
 names(desres) <- nameKey
 rm(desOutFull, desOutTilS, desOutPPC, doFull, doTilS, doPPC) # Clean up
+
+# locusKey <- row.names(anno_table)
+# names(locusKey) <- anno_table$RSlocusTag
+#
+# for ( listitem in names(locusKey)){
+#   if (listitem %in% rownames(allMatrix)){
+#      rownames(allMatrix)[ rownames(allMatrix) == listitem] <- locusKey[[listitem]]
+#   }
+# }
 ```
 
 ## Filtering and collating pairwise results
@@ -322,10 +319,13 @@ Table export options are down at the bottom of the genes panel: look at tightly 
 *Current goals:*
 
 *Update pcaExplorer figures, re-sizing and formatting the pcaExplorer top/bottom loading figures
+*Look at changing hypothesis/threshold for Wald test in comparisons to WT
+*Back through pcaExplorer, look at gene tab
+*BioCyc for pathway help
+*Nail down regions of interest
 *Attaching the GRanges data to the DESEqDataSets.
   +Do I need rtracklayer?
 *gviz up and running, requires pairwise comparisons... and grange, and lfcShrink
-*Back through pcaExplorer, look at gene tab
 
 (remove tRNA mutant from TilS set and see how things change? The ribosomal RNA appears to be dominating results. Should I remove only the ribosomal?)
 
