@@ -8,7 +8,7 @@ read_table_counts <- function(filename){
   return(table_counts)
 }
 
-filtering <- function(df, exclusions, anno){
+filtering <- function(df, exKey, anno){
   # For filtering TilS by chromosome/plasmid with GB annotations
   # parts <- list(  chr3=paste0("Bcen2424_", seq(5867,6788)),
   #                 plmd=paste0("Bcen2424_", seq(6789,6947)),
@@ -16,10 +16,8 @@ filtering <- function(df, exclusions, anno){
   # )
   
   # For filtering TilS by chromosome/plasmid with RF annotations
-  parts <- list( chr3="3", plmd="Plasmid1", both=c("3", "Plasmid1"))
-  ind <- anno$chromosome %in% parts[[exclusions]]
-  table_counts <- df[ !(ind), ]
-  
+  parts <- list( chr3=c("1", "2", "Plasmid1"), plmd=c("1", "2", "3"), both=c("1", "2"))
+  table_counts <- df[ anno$chromosome %in% parts[[exKey]], ]
   return(table_counts)
 }
 
@@ -100,7 +98,7 @@ run_deseq <- function(table_counts, table_design, table_annotations, output_fold
   print("Generating the deseq object...")
   deseq_object <- DESeq(deseq_matrix)
   
-  deseq_results <- run_deseq_pairwise(deseq_object, here(output_folder), table_design$strain)
+  deseq_results <- run_deseq_pairwise(deseq_object, here::here(output_folder), table_design$strain)
   # filename_deseq_results <- paste(output_folder, "unknownwithWTascomparison.tsv", sep  = "/")
   # print("Saving results...")
   # save_deseq_results(deseq_results, filename_deseq_results) # deseq_results is now very large
@@ -159,19 +157,15 @@ des_workflow <- function(resfolder, count_matrix, exclusions, table_design, tabl
   # annotationsdf in R data.frame/matrix format,
   # and the exclusions as a choice from chr3, plmd, or both.
   
-  project_folder <- here()
-  
-  # filename_counts <- here(datafolder,matrixtsv)
-  # filename_design <- here(datafolder,designtsv)
-  # filename_annotations <- here(datafolder, annotationstsv)
-  
+  project_folder <- here::here()
+
   # folder_figures <- paste(project_folder, "figures", sep = "/")
   # filename_clusters <- paste(folder_figures, "clusters.histogram.png", sep = "/")
   
-  dir.create(here(resfolder), showWarnings = FALSE) 
+  dir.create(here::here(resfolder), showWarnings = FALSE) 
   
   print("Filtering count matrix...")
-  table_counts <- filtering(count_matrix, exclusions, table_annotations) #Toggle this to filter out chr3
+  table_counts <- filtering(count_matrix, exclusions, table_annotations)
   
   print("Running deseq...")
   deseq_tables <- run_deseq(table_counts, table_design, table_annotations, resfolder)

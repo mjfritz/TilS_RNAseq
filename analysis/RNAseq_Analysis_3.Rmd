@@ -3,18 +3,19 @@ title: "RNAseq Analysis with kallisto/Chris Deitrick, pt. 3"
 output: html_notebook
 ---
 ```{r}
+library(plyr)
 library(dplyr)
 library(tidyverse)
 library(DESeq2)
 library(knitr)
 library(apeglm)
-library(here)
 library(pcaExplorer)
 library(genefilter)
 library(pheatmap)
 library(RColorBrewer)
 library(viridis)
 library(GenomicFeatures)
+library(here)
 source(here::here("scripts", "deseq_workflow_expanded_mk3.r"), local=TRUE, echo=FALSE)
 ```
 
@@ -55,12 +56,23 @@ python scripts/run_on_kallisto.py --reference data/indeces/GCF_000203955.1_ASM20
 ```
 
 ## Subsetting the data
-And downloaded the three abundance tables. (These DESeq2 scripts only use the .matrix.tsv and .design.tsv)
+Downloaded the three abundance tables from Beagle. (These DESeq2 scripts only use the .matrix.tsv and .design.tsv) Changed the names to  match GB naming. Then ordered the counts and annotation tables to help filtering.
 
 ```{r}
 allMatrix <- read_table_counts(here::here("data", "abundance.all.matrix.tsv"))
 nrow(allMatrix)
 allDesign <- read_table_design(here::here("data", "abundance.all.design.tsv"))
+
+#Change names
+locusKey <- row.names(anno_table)
+names(locusKey) <- anno_table$RSlocusTag
+for ( listitem in names(locusKey)){
+  if (listitem %in% rownames(allMatrix)){
+      rownames(allMatrix)[ rownames(allMatrix) == listitem] <- locusKey[[listitem]]
+  } 
+}
+allMatrix <- allMatrix[ order(row.names(allMatrix)), ] #order the count table
+anno_table <- anno_table[ order(row.names(anno_table)), ]
 ```
 As a note, the counts table does not have rows for the 26 pseudo genes. This may be because the pseudo genes aren't in the fasta files used to run kallisto. *Not sure how to include these yet.*
 
@@ -71,7 +83,6 @@ tilSMatrix <- allMatrix[ , rownames(tilSDesign)]
 ppcDesign <- allDesign[(allDesign$type %in% "ppc") | (allDesign$strain == "WT"), ]
 ppcMatrix <- allMatrix[ , rownames(ppcDesign)]
 ```
-Note: These are still in RefSeq format.
 
 # Rerunning DESeq2 with new annotation tables
 Now, re-run everthing else....
@@ -95,16 +106,15 @@ nameKey <- c("Full", "Full_nochr3", "TilS", "TilS_nochr3", "PPC", "PPC_nochr3")
 names(dds) <- nameKey
 names(desres) <- nameKey
 rm(desOutFull, desOutTilS, desOutPPC, doFull, doTilS, doPPC) # Clean up
-
-# locusKey <- row.names(anno_table)
-# names(locusKey) <- anno_table$RSlocusTag
-#
-# for ( listitem in names(locusKey)){
-#   if (listitem %in% rownames(allMatrix)){
-#      rownames(allMatrix)[ rownames(allMatrix) == listitem] <- locusKey[[listitem]]
-#   }
-# }
 ```
+Checking that filtering actually worked. (Only looking at the biggest data sets.)
+```{r}
+inP <- as.character(anno_table[ anno_table$chromosome == "Plasmid1", "locusTag"])
+in3 <- as.character( anno_table[ anno_table$chromosome == "3", "locusTag"] )
+any( rownames(dds[[1]]) %in% inP )
+any( rownames(dds[[2]]) %in% c(inP, in3))
+```
+
 
 ## Filtering and collating pairwise results
 Using padj < 0.1 as the cutoff. Create list of data frames with signficant genes only for each pairing, from within the list of datasets. (Adding annotation description column, too.)
@@ -115,19 +125,17 @@ desresSig <- lapply(desres, function(matrixof) {
     newdf <- df[order(df$pvalue), ]
     newdf <- subset(newdf, padj<0.1)
     newdf <- as.data.frame(newdf)
-    # newdf <- tibble::rownames_to_column(newdf, var="Gene")
-    
-    newanno <- vector("character", nrow(newdf))
-    names(newanno) <- rownames(newdf)
-    for (listitem in rownames(newdf)){
-      newanno[listitem] <- anno_table[listitem, "name"]
-    }
-    newdf <- merge(newdf, as.data.frame(newanno), by="row.names", all=TRUE)
+    newdf <- tibble::rownames_to_column(newdf, var="locusTag") #to use join_all later
+    newdf$abs_log2 <- abs(newdf$log2FoldChange) # Add absolute value columns
+    newdf$abs_stat <- abs(newdf$stat)
+    newanno <- anno_table[(anno_table$locusTag %in% newdf$locusTag), ] %>%
+      dplyr::select("locusTag", "name", "chromosome") # Subset anno_table to match the shorter list
+    newdf <- join_all( list(newdf, newanno), by = "locusTag", type = "full" )
     return (newdf)
   })
 })
 ```
-
+*(interesting to note which pairwise did not return any results meeting the cutoff.)*
 Collating pairwise results for each dataset, and writing to csv file in main results folder. Each gene can be listed multiple times, but will have column entries denoting with mutant compared to which mutant.
 ```{r}
 
@@ -281,6 +289,7 @@ pcas <- lapply(setNames(nameKey,nameKey), function(listitem) {
 The interacitve viewer is useful for grabbing the top and bottom loading genes for each principle component. Adding a column to add the gene description to the locus tag.
 ```{r}
 anno_table$gene_name <- paste(anno_table$locusTag, anno_table$symbol, anno_table$name, sep = "-")
+write.csv(anno_table, file=here::here("data", "references", "anno_table.csv"), row.names = FALSE)
 ```
 
 Running pcaExplorer on each data set. Mostly interested in the TilS and PPC subsets. Saving the top/bottom loading genes, expression projections, and the variance explained by PC (scree).
@@ -314,6 +323,92 @@ pcaExplorer(dds = dds[["Full_nochr3"]], dst = rld[["Full_nochr3"]], coldata = al
 ```
 Table export options are down at the bottom of the genes panel: look at tightly clustered genes? (Full data set is actually interesting to see in that window.)
 
+# LFC and MA-Plots
+For these, going to focus in on the WT-as-reference set of data from the results. Generating the list of matchups for each data set.
+```{r}
+matchups <- lapply(setNames(nameKey, nameKey), function(listitem){
+  resultsNames(dds[[listitem]])
+})
+```
+
+## LFC Shrinkage
+Calculating the shrinkage of effect size for each WT pairing of each dataset.
+
+```{r}
+resLFCWT <- lapply(setNames(nameKey, nameKey), function(listitem){
+  lapply(setNames(matchups[[listitem]], matchups[[listitem]]), function(eachmatch){
+    if( as.character(eachmatch) != "Intercept"){
+      print(eachmatch)
+      lfcShrink(dds[[listitem]], coef = eachmatch, type = "apeglm")
+    }
+  })
+})
+```
+
+(lfcShrink can also output in GRanges format, which I what I think I need for below.)
+## MA-Plots
+Plotting each individually allows interactive caputring of outlier genes. (Also requires the corresponding desres object.)
+
+The desres lists are somewhat difficult to navigate. For the full data sets (1 and 2) the WT references are in the sublists at multiples of 7 (6 total), ing TilS subsets at the multiples of 5 (4 total), and in PPC subsets at the multiples of 2 (2 of them.)
+```{r}
+print("Names of resLFCWT elements")
+for(listitem in nameKey){
+  print(listitem)
+  print(names(resLFCWT[[listitem]]))
+}
+
+desresWTfull <- lapply( 1:2, function(i){
+  lapply(1:7, function(j){ desres[[i]][[j*7]] })
+})
+desresWTTilS <- lapply( 3:4, function(i){
+  lapply(1:5, function(j){ desres[[i]][[j*5]] })
+})
+desresWTPPC <- lapply( 5:6, function(i){
+  lapply(1:2, function(j){ desres[[i]][[j*2]] })
+})
+desresWT <- c(desresWTfull, desresWTTilS, desresWTPPC)
+rm(desresWTfull, desresWTTilS, desresWTPPC)
+#Name the elements for easier reference by mutant being compared
+names(desresWT) <- nameKey
+mutnameKey<- lapply(setNames(nameKey, nameKey), function(listitem){
+   muts <- as.character(levels(dds[[listitem]]$strain))
+   muts <- muts[muts != "WT"]
+ })
+print("Names of desresWT elements")
+print(mutnameKey)
+for (listitem in nameKey){
+  names(desresWT[[listitem]]) <- mutnameKey[[listitem]]
+}
+idx <- vector("list", 7)
+```
+
+Focusing at the moment on TilS_nochr3 subset, then PPC_nochr3. The following lines of code need to be run from the console, not from within the notebook for the interactive funciton to work. 
+```{r}
+labels <- letters[1:10]
+# plotMA(resLFCWT[["TilS_nochr3"]][["strain_A244T_vs_WT"]], ylim=c(-2.5,3))
+# #The following lines are run after selecting data points.
+# idx <- identify(desresWT[["TilS_nochr3"]][["A224T"]]$baseMean,
+#                 desresWT[["TilS_nochr3"]][["A224T"]]$log2FoldChange,
+#                 n = 10, labels = labels, plot=TRUE)
+```
+
+
+```{r}
+# rownames(desresWT[["TilS_nochr3"]][["A224T"]])[idx[["A224T"]]]
+```
+(Might be an idea to capture points first that need labled to the right, then to the left, and plot each separately.)
+
+```{r}
+singleresLFC <- resLFCWT[["TilS_nochr3"]][["strain_A244T_vs_WT"]]
+singleresWT <- desresWT[["TilS_nochr3"]][["A244T"]]
+MA <- plotMA(singleresLFC, ylim=c(-2.5,3), main = "A224T vs WT")
+idx <- identify(singleresWT$baseMean, singleresWT$log2FoldChange, n = 10, labels = labels, plot = TRUE)
+rownames(singleresWT)[idx]
+text(singleresWT$baseMean[idx], singleresWT$log2FoldChange[idx], rownames(singleresWT)[idx], pos = 3, cex = 1)
+```
+```{r}
+library(geneplotter)
+```
 
 # Gviz?
 *Current goals:*
