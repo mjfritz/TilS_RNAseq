@@ -15,7 +15,8 @@ library(pheatmap)
 library(RColorBrewer)
 library(viridis)
 library(GenomicFeatures)
-library(wordcloud)
+library(ggpubr)
+library(ggrepel)
 library(here)
 source(here::here("scripts", "deseq_workflow_expanded_mk3.r"), local=TRUE, echo=FALSE)
 ```
@@ -116,6 +117,9 @@ in3 <- as.character( anno_table[ anno_table$chromosome == "3", "locusTag"] )
 any( rownames(dds[[1]]) %in% inP )
 any( rownames(dds[[2]]) %in% c(inP, in3))
 ```
+
+### Null entires
+There are some null entires in the comparisons to WT. See MA-plots section for exact genes.
 
 
 ## Filtering and collating pairwise results
@@ -400,6 +404,8 @@ any(resLFCWT[["TilS_nochr3"]][["strain_N445K_vs_WT"]]$padj < 0.3)
 
 (lfcShrink can also output in GRanges format, which I what I think I need for GViz plots.)
 ## MA-Plots
+Got a lot of help from the standard DESeq2 vignettes, but also [this tutorial.](https://hbctraining.github.io/DGE_workshop/lessons/05_DGE_DESeq2_analysis2.html)
+
 Plotting each individually allows interactive caputring of outlier genes. (Also requires the corresponding desres object.)
 
 The desres lists are somewhat difficult to navigate. For the full data sets (1 and 2) the WT references are in the sublists at multiples of 7 (6 total), ing TilS subsets at the multiples of 5 (4 total), and in PPC subsets at the multiples of 2 (2 of them.)
@@ -409,7 +415,7 @@ for(listitem in nameKey){
   print(listitem)
   print(names(resLFCWT[[listitem]]))
 }
-# Not sure I actually need these
+
 desresWTfull <- lapply( 1:2, function(i){
   lapply(1:7, function(j){ desres[[i]][[j*7]] })
 })
@@ -438,27 +444,30 @@ Focusing at the moment on TilS_nochr3 subset, then PPC_nochr3.
 For the interactive capturing/labeling of points, the plotMA call needs to be run from the console (not the notebook.) Followed by the idx-identify line in the console, and clicking on the points in the plot window.
 (For clearer labels: capture points that need labeled in one direction (above, below, to the right/left) and plot each separately with multiple identify calls. n defines how many points are being picked up, and pos is where the label will go relative to the point.)
 
-These are easier to work with indvidually, out of the list. (Just swapping the dataset and mutant specificers in the first two lines, and the title in the third for each. Then modifying the points and labeling as I go. Collecting points saved as I go in a list. (Helps to reference the significant values tables for each comparison.) Saving these manually from the plot window
+These are easier to work with indvidually, out of the list. (Just swapping the dataset and mutant specificers, and the titles in the plot call. Then modifying the points and labeling as I go. Collecting points saved as I go in a list. (Helps to reference the significant values tables for each comparison.) Saving these manually from the plot window
+
+
+
+
 ```{r}
 # # Setup for collecting data, just in case? Can call in the notebook
 # maPoints <- vector("list", 6)
 # names(maPoints) <- nameKey
-# maPoints <- lapply(nameKey, function(listitem) {
+# maPoints <- lapply(setNames(nameKey, nameKey), function(listitem) {
 #   indv <- vector("list", length(mutnameKey[[listitem]]))
 #   names(indv) <- mutnameKey[[listitem]]
 #   return(indv)
 # })
-# names(maPoints) <- nameKey
 ```
 
 
 ```{r}
 # Specify which LFC shrinkage and results sets
-singleresLFC <- resLFCWT[["TilS_nochr3"]][["strain_N274Y_vs_WT"]]
-# Find max shrunken logfoldchange
-min(singleresLFC$log2FoldChange)
-max(singleresLFC$log2FoldChange)
-
+singleresLFC <- resLFCWT[["PPC_nochr3"]][["strain_T41T_vs_WT"]]
+any(is.na(singleresLFC$log2FoldChange)) # General check (follow up with which() call.)
+# Find min/max shrunken logfoldchange to adjust limits
+min(singleresLFC$log2FoldChange, na.rm = TRUE)
+max(singleresLFC$log2FoldChange, na.rm = TRUE)
 
 # Get index number of specific locusTAg
 match("Bcen2424_4447", rownames(singleresLFC))
@@ -466,17 +475,27 @@ match("Bcen2424_1362", rownames(singleresLFC))
 ```
 
 ```{r}
-# Create list of genes of interest
+# Create list of genes of interest and set parameters for plot
 hR <- 4333
 hL <- 1321
 highlight <- c(hR, hL)
+ylow <- -1
+yhigh <- 2
+ptitle <- "T41T vs WT, PPC subset with Chromosomes 1&2"
+```
 
+```{r}
 # Call these from console: Create plot, add two sets of texts to the right/left of points, highlight selected points
-plotMA(singleresLFC, ylim=c(-5,3), main = "N274Y vs WT, TilS set with Chromosomes 1&2")
+plotMA(singleresLFC, ylim=c(ylow,yhigh), main = ptitle)
 text(singleresLFC$baseMean[hR], singleresLFC$log2FoldChange[hR], rownames(singleresLFC)[hR], pos = 4, cex = 1, offset = 0.5)
-text(singleresLFC$baseMean[hL], singleresLFC$log2FoldChange[hL], rownames(singleresLFC)[hL], pos = 2, cex = 1, offset = 0.5)
+text(singleresLFC$baseMean[hL], singleresLFC$log2FoldChange[hL], rownames(singleresLFC)[hL], pos = 3, cex = 1, offset = 0.5)
 points(singleresLFC$baseMean[highlight], singleresLFC$log2FoldChange[highlight], col = "blue")
+```
 
+To augment the plots, while the plot is still displayed in the plot pane:
+*Decide how many points to select (grouped by what position to put the labels in), change n =
+*Run one of the idx lines (character for position of label) from console and select points.
+```{r}
 # MUST CALL THESE FROM CONSOLE INDIVIDUALLY
 # Identifying points by clicking, n is number to choose.
 # To use the text() call to label, pos and plot must be false. To list index numbers as lables: plot=TRUE, pos is directional.
@@ -484,7 +503,7 @@ idxR <- identify(singleresLFC$baseMean, singleresLFC$log2FoldChange, n = 3, tole
 text(singleresLFC$baseMean[idxR], singleresLFC$log2FoldChange[idxR],
      rownames(singleresLFC)[idxR], pos = 4, cex = 0.5, offset = 0.2)
 
-idxL <- identify(singleresLFC$baseMean, singleresLFC$log2FoldChange, n = 4, tolerance = 0.1, plot = FALSE, pos = FALSE)
+idxL <- identify(singleresLFC$baseMean, singleresLFC$log2FoldChange, n = 1, tolerance = 0.1, plot = FALSE, pos = FALSE)
 text(singleresLFC$baseMean[idxL], singleresLFC$log2FoldChange[idxL],
      rownames(singleresLFC)[idxL], pos = 2, cex = 0.5, offset = 0.2)
 
@@ -496,7 +515,6 @@ idxB <- identify(singleresLFC$baseMean, singleresLFC$log2FoldChange, n = 1, tole
 text(singleresLFC$baseMean[idxB], singleresLFC$log2FoldChange[idxB],
      rownames(singleresLFC)[idxB], pos = 1, cex = 0.5, offset = 0.2)
 
-# Get index number of 
 
 # Saving the points, but this closes the plot if run in the notebook (run in the console!)
 holder <- rownames(singleresLFC)[idx] #Initial creation of list
@@ -505,6 +523,7 @@ maPoints[["TilS_nochr3"]][["A244T"]] <- holder
 ```
 Also grabbing points that are too close together to label, stored in other_upper/lower.
 
+*These must all be saved from the plot pane.*
 
 
 May make more sense to store all of the text to be plotted, then plot with textplot() from wordcloud package.
@@ -513,6 +532,128 @@ idx <- identify(singleresLFC$baseMean, singleresLFC$log2FoldChange, n = 18, tole
 textplot(singleresLFC$baseMean[idx], singleresLFC$log2FoldChange[idx], rownames(singleresLFC)[idx], cex=0.5, new=FALSE, show.lines = TRUE)
 ```
 Not working, so sad :(
+
+(In creating these, I found that there are null entires for these genes in this subset. So far only looked through the TilS_nochr3 and PPC_nochr3 subsets. Have not fully checked all sets. Gene name and index listed.)
+```{r}
+nulls <- vector("list", 6)
+names(nulls) <- nameKey
+nulls <- lapply(setNames(nameKey, nameKey), function(listitem) {
+  indv <- vector("list", length(mutnameKey[[listitem]]))
+  names(indv) <- mutnameKey[[listitem]]
+  return(indv)
+})
+nulls[["PPC_nochr3"]][["S3C"]] <- which(is.na(resLFCWT[["PPC_nochr3"]][["strain_S3C_vs_WT"]]$log2FoldChange))
+nulls[["PPC_nochr3"]][["T41T"]] <- which(is.na(resLFCWT[["PPC_nochr3"]][["strain_T41T_vs_WT"]]$log2FoldChange))
+nulls
+```
+
+### MA-plots automated
+Using ggpubr's ggmaplot to automate plot production, with more customizability in ggplot2.
+This inital setup has the top 20 genes by shrunken log2fold change (other option is by padj.)
+Highlighted gene is isocitrate lyase.
+```{r}
+falseDisRate <- 0.05
+shrunklfc.cutoff <- 0.58 # Corresponds to 1.5
+lfc.cutoff <- 1.5
+highlight <- 4333 # Indeces of genes to highlight in plot
+# Create the file structure
+lapply(names(resLFCWT), function(listitem){
+    dir.create(here::here("results", "MAplots", listitem), recursive = TRUE, showWarnings = FALSE)
+})
+maPlots <- lapply(setNames(names(resLFCWT), names(resLFCWT)), function(listitem){
+  lapply(setNames(names(resLFCWT[[listitem]]), names(resLFCWT[[listitem]])), function(pairing){
+    df.highlight <- as.data.frame(resLFCWT[[listitem]][[pairing]])[highlight, ]
+    df.highlight$logMean <- log2(df.highlight$baseMean)
+    t <- gsub("strain_", "", pairing, fixed = TRUE)
+    t <- gsub("_vs_WT", "", t, fixed = TRUE)
+    dset <- c("Full"="Full dataset, without plasmid",
+              "Full_nochr3"="Full dataset, Chromosomes 1&2",
+              "TilS"="TilS subset, without plasmid",
+              "TilS_nochr3"="TilS subset, Chromosomes 1&2",
+              "PPC"="PPC subset, without plasmid",
+              "PPC_nochr3"="PPC subset, Chromosomes 1&2")
+    p <- ggmaplot(resLFCWT[[listitem]][[pairing]], main = paste(t, "vs WT ",dset, sep=" "),
+                    fdr = falseDisRate, fc = shrunklfc.cutoff, size = 0.4,
+                    palette = c("#B31B21", "#1465AC", "darkgray"),
+                    genenames = as.vector(rownames(resLFCWT[[listitem]][[pairing]])),
+                    legend = "top", top = 20,
+                    select.top.method = "fc", #Can select top by foldchange "fc" or "padj"
+                    font.label =  11,
+                    font.legend = "bold",
+                    font.main = "bold",
+                    ylab = "Shrunken log2fold change",
+                    ggtheme = ggplot2::theme_minimal()) +
+      geom_label_repel(data = df.highlight, aes(x=logMean, y=log2FoldChange),
+                       label = rownames(df.highlight), fill = NA, xlim = c(NA, 6))
+  ggsave(here::here("results", "MAplots", listitem, paste("MAplot", pairing, listitem, "eps", sep=".")),
+         plot = p, width = 9, height = 7, units = "in", device = "eps")
+  ggsave(here::here("results", "MAplots", listitem, paste("MAplot", pairing, listitem, "pdf", sep=".")),
+         plot = p, width = 9, height = 7, units = "in", device = "pdf")
+    return(p)
+  })
+})
+```
+
+
+The manual creation that the automated form is based off of.
+```{r}
+dir.create(here::here("results", "pairwise", "unshrunk_MAplots"))
+ggsingleShrunk <- resLFCWT[["TilS_nochr3"]][["strain_A244T_vs_WT"]]
+ggsingleRes <- desresWT[["TilS_nochr3"]][["A244T"]]
+
+df.highlight <- as.data.frame(ggsingleShrunk)[highlight, ]
+df.noShrink.highlight <- as.data.frame(ggsingleRes)[highlight, ]
+df.highlight$logMean <- log2(df.highlight$baseMean)
+df.noShrink.highlight$logMean <- log2(df.noShrink.highlight$baseMean)
+
+pShrunk <- ggmaplot(ggsingleShrunk, main = "A244T to WT, Chromosomes 1&2, TilS Subset",
+                    fdr = falseDisRate, fc = shrunklfc.cutoff, size = 0.4,
+                    palette = c("#B31B21", "#1465AC", "darkgray"),
+                    genenames = as.vector(rownames(ggsingleShrunk)),
+                    legend = "top", top = 20,
+                    select.top.method = "padj", #Can select top by foldchange "fc" or "padj"
+                    font.label =  11,
+                    font.legend = "bold",
+                    font.main = "bold",
+                    ylab = "Shrunken log2fold change",
+                    ggtheme = ggplot2::theme_minimal()) +
+#  geom_point(data = df.highlight, mapping = aes(x=logMean, y=log2FoldChange), color = "orange", size = 0.8) + 
+  geom_label_repel(data = df.highlight, aes(x=logMean, y=log2FoldChange),
+                   label = rownames(df.highlight), fill = NA, xlim = c(NA, 6))
+print(pShrunk)
+ggsave(here::here("results", "MAplots", "MA_A244TtoWT_TilS_nochr3.eps"),
+       plot = pShrunk ,device = "eps")
+# ggsave(here::here("results", "MAplots", "MA_A244TtoWT_TilS_nochr3.svg"),
+#        plot = pShrunk ,device = "svg")
+ggsave(here::here("results", "MAplots", "MA_A244TtoWT_TilS_nochr3.pdf"),
+       plot = pShrunk ,device = "pdf")
+```
+
+Looking at the unshrunken (original) sets.
+```{r}
+plfc <- ggmaplot(ggsingleRes, main = "A244T to WT, Chromosomes 1&2, TilS Subset",
+                 fdr = falseDisRate, fc = lfc.cutoff, size = 0.4,
+                 palette = c("#B31B21", "#1465AC", "darkgray"),
+                 genenames = as.vector(rownames(ggsingleRes)),
+                 legend = "top", top = 20,
+                 select.top.method = "fc",
+                 font.label =  11,
+                 font.legend = "bold",
+                 font.main = "bold",
+                 ylab = "Log2fold change",
+                 ggtheme = ggplot2::theme_minimal()) +
+  geom_label_repel(data = df.noShrink.highlight, aes(x=logMean, y=log2FoldChange),
+                   label = rownames(df.noShrink.highlight), fill = NA, xlim = c(NA, 6))
+print(plfc)
+
+ggsave(here::here("results", "MAplots", "unshrunk_MAplots", "MA_unshrunk_A244TtoWT_TilS_nochr3.eps"),
+       plot = plfc ,device = "eps")
+# ggsave(here::here("results", "MAplots", "unshrunk_MAplots", "MA_unshrunk_A244TtoWT_TilS_nochr3.svg"),
+#        plot = plfc ,device = "svg")
+ggsave(here::here("results", "MAplots", "unshrunk_MAplots", "MA_unshrunk_A244TtoWT_TilS_nochr3.pdf"),
+       plot = plfc ,device = "pdf")
+```
+
 
 
 # Gviz?
