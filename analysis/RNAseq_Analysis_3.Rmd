@@ -446,7 +446,7 @@ For the interactive capturing/labeling of points, the plotMA call needs to be ru
 
 These are easier to work with indvidually, out of the list. (Just swapping the dataset and mutant specificers, and the titles in the plot call. Then modifying the points and labeling as I go. Collecting points saved as I go in a list. (Helps to reference the significant values tables for each comparison.) Saving these manually from the plot window
 
-
+(To be clear: resLFCWT contains the shrunken values, desresWT contains the original, unshrunk values)
 
 
 ```{r}
@@ -462,8 +462,8 @@ These are easier to work with indvidually, out of the list. (Just swapping the d
 
 
 ```{r}
-# Specify which LFC shrinkage and results sets
-singleresLFC <- resLFCWT[["PPC_nochr3"]][["strain_T41T_vs_WT"]]
+# Specify which LFC (shrunk or original) and which comparison
+singleresLFC <- desresWT[["TilS_nochr3"]][["N445K"]]
 any(is.na(singleresLFC$log2FoldChange)) # General check (follow up with which() call.)
 # Find min/max shrunken logfoldchange to adjust limits
 min(singleresLFC$log2FoldChange, na.rm = TRUE)
@@ -479,16 +479,16 @@ match("Bcen2424_1362", rownames(singleresLFC))
 hR <- 4333
 hL <- 1321
 highlight <- c(hR, hL)
-ylow <- -1
-yhigh <- 2
-ptitle <- "T41T vs WT, PPC subset with Chromosomes 1&2"
+ylow <- -2.5
+yhigh <- 3.5
+ptitle <- "N445K vs WT, not shrunk, TilS subset with Chromosomes 1&2"
 ```
 
 ```{r}
 # Call these from console: Create plot, add two sets of texts to the right/left of points, highlight selected points
 plotMA(singleresLFC, ylim=c(ylow,yhigh), main = ptitle)
 text(singleresLFC$baseMean[hR], singleresLFC$log2FoldChange[hR], rownames(singleresLFC)[hR], pos = 4, cex = 1, offset = 0.5)
-text(singleresLFC$baseMean[hL], singleresLFC$log2FoldChange[hL], rownames(singleresLFC)[hL], pos = 3, cex = 1, offset = 0.5)
+text(singleresLFC$baseMean[hL], singleresLFC$log2FoldChange[hL], rownames(singleresLFC)[hL], pos = 2, cex = 1, offset = 0.5)
 points(singleresLFC$baseMean[highlight], singleresLFC$log2FoldChange[highlight], col = "blue")
 ```
 
@@ -499,19 +499,19 @@ To augment the plots, while the plot is still displayed in the plot pane:
 # MUST CALL THESE FROM CONSOLE INDIVIDUALLY
 # Identifying points by clicking, n is number to choose.
 # To use the text() call to label, pos and plot must be false. To list index numbers as lables: plot=TRUE, pos is directional.
-idxR <- identify(singleresLFC$baseMean, singleresLFC$log2FoldChange, n = 3, tolerance = 0.1, plot = FALSE, pos = FALSE)
+idxR <- identify(singleresLFC$baseMean, singleresLFC$log2FoldChange, n = 8, tolerance = 0.1, plot = FALSE, pos = FALSE)
 text(singleresLFC$baseMean[idxR], singleresLFC$log2FoldChange[idxR],
      rownames(singleresLFC)[idxR], pos = 4, cex = 0.5, offset = 0.2)
 
-idxL <- identify(singleresLFC$baseMean, singleresLFC$log2FoldChange, n = 1, tolerance = 0.1, plot = FALSE, pos = FALSE)
+idxL <- identify(singleresLFC$baseMean, singleresLFC$log2FoldChange, n = 3, tolerance = 0.1, plot = FALSE, pos = FALSE)
 text(singleresLFC$baseMean[idxL], singleresLFC$log2FoldChange[idxL],
      rownames(singleresLFC)[idxL], pos = 2, cex = 0.5, offset = 0.2)
 
-idxT <- identify(singleresLFC$baseMean, singleresLFC$log2FoldChange, n = 4, tolerance = 0.1, plot = FALSE, pos = FALSE)
+idxT <- identify(singleresLFC$baseMean, singleresLFC$log2FoldChange, n = 2, tolerance = 0.1, plot = FALSE, pos = FALSE)
 text(singleresLFC$baseMean[idxT], singleresLFC$log2FoldChange[idxT],
      rownames(singleresLFC)[idxT], pos = 3, cex = 0.5, offset = 0.2)
 
-idxB <- identify(singleresLFC$baseMean, singleresLFC$log2FoldChange, n = 1, tolerance = 0.1, plot = FALSE, pos = FALSE)
+idxB <- identify(singleresLFC$baseMean, singleresLFC$log2FoldChange, n = 2, tolerance = 0.1, plot = FALSE, pos = FALSE)
 text(singleresLFC$baseMean[idxB], singleresLFC$log2FoldChange[idxB],
      rownames(singleresLFC)[idxB], pos = 1, cex = 0.5, offset = 0.2)
 
@@ -593,7 +593,7 @@ maPlots <- lapply(setNames(names(resLFCWT), names(resLFCWT)), function(listitem)
   })
 })
 ```
-
+(In theory, this could be transferred to the workflow in some way? Is it worth it? Would need to pass most of the parameters.)
 
 The manual creation that the automated form is based off of.
 ```{r}
@@ -629,32 +629,25 @@ ggsave(here::here("results", "MAplots", "MA_A244TtoWT_TilS_nochr3.pdf"),
        plot = pShrunk ,device = "pdf")
 ```
 
-Looking at the unshrunken (original) sets.
+## Thoughts on significant results
+padj values are super high for tRNA and N445K, and maybe be harshly filtering. Will filtering out the lower count genes increase padj?
+Need to focus in on the WT comparisons, and the subset data...
+
+General look:
 ```{r}
-plfc <- ggmaplot(ggsingleRes, main = "A244T to WT, Chromosomes 1&2, TilS Subset",
-                 fdr = falseDisRate, fc = lfc.cutoff, size = 0.4,
-                 palette = c("#B31B21", "#1465AC", "darkgray"),
-                 genenames = as.vector(rownames(ggsingleRes)),
-                 legend = "top", top = 20,
-                 select.top.method = "fc",
-                 font.label =  11,
-                 font.legend = "bold",
-                 font.main = "bold",
-                 ylab = "Log2fold change",
-                 ggtheme = ggplot2::theme_minimal()) +
-  geom_label_repel(data = df.noShrink.highlight, aes(x=logMean, y=log2FoldChange),
-                   label = rownames(df.noShrink.highlight), fill = NA, xlim = c(NA, 6))
-print(plfc)
-
-ggsave(here::here("results", "MAplots", "unshrunk_MAplots", "MA_unshrunk_A244TtoWT_TilS_nochr3.eps"),
-       plot = plfc ,device = "eps")
-# ggsave(here::here("results", "MAplots", "unshrunk_MAplots", "MA_unshrunk_A244TtoWT_TilS_nochr3.svg"),
-#        plot = plfc ,device = "svg")
-ggsave(here::here("results", "MAplots", "unshrunk_MAplots", "MA_unshrunk_A244TtoWT_TilS_nochr3.pdf"),
-       plot = plfc ,device = "pdf")
+keepers10 <- rowSums(counts(dds[["TilS_nochr3"]])) >= 10
+keepers20 <- rowSums(counts(dds[["TilS_nochr3"]])) >= 20
+keepers30 <- rowSums(counts(dds[["TilS_nochr3"]])) >= 30
+print(paste0("Threshold of 10 drops: ", 5952-sum(keepers10)))
+print(paste0("Threshold of 20 drops: ", 5952-sum(keepers20)))
+print(paste0("Threshold of 30 drops: ", 5952-sum(keepers30)))
+dropped20 <- dds[["TilS_nochr3"]][!(keepers20), ]
+print("Annotation of what a threshold of 20 drops:")
+anno_table[ (anno_table$locusTag %in% rownames(dropped20)), "name"]
 ```
+Not too many are dropped. Can add in general.
 
-
+This sample comparison to wildtype doesn't yield as many results as, say, Rockhopper. This may be because of filtering on padj, over the pvalue. 
 
 # Gviz?
 *Current goals:*
